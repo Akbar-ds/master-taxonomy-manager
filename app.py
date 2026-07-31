@@ -2,6 +2,118 @@ import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
 from datetime import datetime, timedelta, date
+from google import genai
+
+# Initialize Gemini client using secrets
+@st.cache_resource
+def get_gemini_client():
+  return genai.Client(api_key=st.secrets["gemini"]["api_key"])
+
+
+def classify_batch_articles(df_articles, taxonomy_df):
+  client = get_gemini_client()
+  taxonomy_reference = taxonomy_df.to_string(index=False)
+
+  results = []
+  progress_bar = st.progress(0)
+  total_rows = len(df_articles)
+
+  for idx, row in df_articles.iterrows():
+    # Adjust 'article_text' to match the column name in your uploaded file
+    article_content = str(row.get("article_text", ""))
+
+    prompt = f"""
+        You are an expert media analyst and taxonomy classification engine.
+        Analyze the following article content and categorize it strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules provided in the Master Taxonomy Reference below.
+
+        ### Master Taxonomy Reference:
+        {taxonomy_reference}
+
+        ### Strict Rules:
+        1. Choose the Category, Subcategory, Topic, and Tonality strictly from the reference list.
+        2. If the article does not fit any topic in the reference list, output Category as "Cannot analyze as no relevant topic found", and leave Subcategory and Topic as "N/A".
+        3. Provide an "Overall Tonality" column indicating the general tone (Positive, Negative, Neutral, Mixed).
+
+        ### Article Content:
+        {article_content}
+
+        Return your response strictly in this format:
+        Category: [Value]
+        Subcategory: [Value]
+        Topic: [Value]
+        Tonality: [Value]
+        Overall Tonality: [Value]
+        """
+
+    try:
+      response = client.models.generate_content(
+          model="gemini-2.5-flash",
+          contents=prompt,
+      )
+      text = response.text
+      # Simple parser to extract fields from the text response
+      parsed = {}
+      for line in text.split("\n"):
+        if ":" in line:
+          parts = line.split(":", 1)
+          parsed[parts[0].strip()] = parts[1].strip()
+
+      results.append({
+          "Category": parsed.get("Category", "Error"),
+          "Subcategory": parsed.get("Subcategory", "N/A"),
+          "Topic": parsed.get("Topic", "N/A"),
+          "Tonality": parsed.get("Tonality", "N/A"),
+          "Overall Tonality": parsed.get("Overall Tonality", "N/A"),
+      })
+    except Exception as e:
+      results.append({
+          "Category": "Error",
+          "Subcategory": str(e),
+          "Topic": "N/A",
+          "Tonality": "N/A",
+          "Overall Tonality": "N/A",
+      })
+
+    progress_bar.progress((idx + 1) / total_rows)
+
+  return pd.concat(
+      [df_articles.reset_index(drop=True), pd.DataFrame(results)], axis=1
+  )
+
+
+# --- Streamlit UI Component for Your App ---
+st.setHeader = st.subheader
+st.setHeader("🤖 Bulk Article Classification Pipeline")
+
+uploaded_file = st.file_uploader(
+    "Upload Excel or CSV containing your articles", type=["xlsx", "csv"]
+)
+
+if uploaded_file:
+  if uploaded_file.name.endswith(".csv"):
+    df_input = pd.read_csv(uploaded_file)
+  else:
+    df_input = pd.read_excel(uploaded_file)
+
+  st.write("Preview of Uploaded Data:", df_input.head())
+
+  # Assuming you fetch your taxonomy dataframe from Supabase or load it locally:
+  # taxonomy_df = fetch_master_taxonomy_from_supabase()
+  # For testing, you can pass your loaded taxonomy dataframe here.
+
+  if st.button("🚀 Run AI Classification"):
+    # Placeholder for taxonomy dataframe - ensure your taxonomy DataFrame is loaded here
+    # e.g., taxonomy_df = pd.read_csv("taxonomy.csv") or fetched from Supabase
+    st.info(
+        "Processing articles through Gemini using your master taxonomy rules..."
+    )
+    # output_df = classify_batch_articles(df_input, taxonomy_df)
+    # st.success("Classification complete!")
+    # st.dataframe(output_df)
+
+
+
+
 
 # Page Configuration
 st.set_page_config(

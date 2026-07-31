@@ -417,13 +417,14 @@ if app_mode == "🤖 Bulk AI Classifier Pipeline":
                   "Overall Tonality": parsed.get("Overall Tonality", "N/A"),
               })
             except Exception as e:
-              results.append({
-                  "Category": "Error",
-                  "Subcategory": str(e),
-                  "Topic": "N/A",
-                  "Tonality": "N/A",
-                  "Overall Tonality": "N/A",
-              })
+                st.write(f"Detailed Debug Error: {e}")  # Temporarily see exact error
+                results.append({
+                    "Category": "Error",
+                    "Subcategory": str(e),
+                    "Topic": "N/A",
+                    "Tonality": "N/A",
+                    "Overall Tonality": "N/A",
+             })
             progress_bar.progress((idx + 1) / total_rows)
 
           return pd.concat(

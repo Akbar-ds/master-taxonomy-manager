@@ -101,15 +101,38 @@ if uploaded_file:
   # taxonomy_df = fetch_master_taxonomy_from_supabase()
   # For testing, you can pass your loaded taxonomy dataframe here.
 
-  if st.button("🚀 Run AI Classification"):
-    # Placeholder for taxonomy dataframe - ensure your taxonomy DataFrame is loaded here
-    # e.g., taxonomy_df = pd.read_csv("taxonomy.csv") or fetched from Supabase
-    st.info(
-        "Processing articles through Gemini using your master taxonomy rules..."
+ # Make sure you load your taxonomy DataFrame (either locally or from Supabase)
+# For example, if you have your taxonomy file in your repo:
+@st.cache_data
+def load_taxonomy():
+  return pd.read_excel("NEW SA Topic CAT Gemini.xlsx")
+
+
+taxonomy_df = load_taxonomy()
+
+if st.button("🚀 Run AI Classification"):
+  if "content_snippet" not in df_input.columns:
+    st.error(
+        "Error: Uploaded file must contain a column named 'content_snippet'."
     )
-    # output_df = classify_batch_articles(df_input, taxonomy_df)
-    # st.success("Classification complete!")
-    # st.dataframe(output_df)
+  else:
+    with st.spinner(
+        "Processing articles through Gemini using your master taxonomy"
+        " rules..."
+    ):
+      output_df = classify_batch_articles(df_input, taxonomy_df)
+
+    st.success("✨ Classification complete!")
+    st.dataframe(output_df)
+
+    # Add a download button for the categorized results
+    csv_data = output_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Download Categorized Results as CSV",
+        data=csv_data,
+        file_name="categorized_articles_output.csv",
+        mime="text/csv",
+    )
 
 
 

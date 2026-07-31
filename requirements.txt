@@ -1,5 +1,6 @@
 streamlit
-supabase
 pandas
-google-genai
 openpyxl
+google-genai
+supabase
+streamlit-supabase-auth

@@ -4,14 +4,27 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 from google import genai
 
-# Initialize Gemini client using secrets
+
+# 1. Initialize Gemini client securely from secrets
 @st.cache_resource
 def get_gemini_client():
   return genai.Client(api_key=st.secrets["gemini"]["api_key"])
 
 
+# 2. Automatically load master taxonomy rules from your uploaded Excel file
+@st.cache_data
+def load_taxonomy():
+  # Reads your master file directly from your repository workspace
+  xls = pd.ExcelFile("NEW SA Topic CAT Gemini.xlsx")
+  return pd.read_excel(xls, xls.sheet_names[0])
+
+
+taxonomy_df = load_taxonomy()
+
+
 def classify_batch_articles(df_articles, taxonomy_df):
   client = get_gemini_client()
+  # Convert the loaded excel taxonomy table into text rules for the model
   taxonomy_reference = taxonomy_df.to_string(index=False)
 
   results = []
@@ -19,8 +32,7 @@ def classify_batch_articles(df_articles, taxonomy_df):
   total_rows = len(df_articles)
 
   for idx, row in df_articles.iterrows():
-    # Adjust 'article_text' to match the column name in your uploaded file
-    article_content = str(row.get("article_text", ""))
+    article_content = str(row.get("content_snippet", ""))
 
     prompt = f"""
         You are an expert media analyst and taxonomy classification engine.
@@ -51,7 +63,8 @@ def classify_batch_articles(df_articles, taxonomy_df):
           contents=prompt,
       )
       text = response.text
-      # Simple parser to extract fields from the text response
+
+      # Parse model output cleanly line by line
       parsed = {}
       for line in text.split("\n"):
         if ":" in line:
@@ -81,9 +94,8 @@ def classify_batch_articles(df_articles, taxonomy_df):
   )
 
 
-# --- Streamlit UI Component for Your App ---
-st.setHeader = st.subheader
-st.setHeader("🤖 Bulk Article Classification Pipeline")
+# --- Streamlit Frontend UI ---
+st.subheader("🤖 Bulk Article Classification Pipeline")
 
 uploaded_file = st.file_uploader(
     "Upload Excel or CSV containing your articles", type=["xlsx", "csv"]
@@ -97,42 +109,29 @@ if uploaded_file:
 
   st.write("Preview of Uploaded Data:", df_input.head())
 
-  # Assuming you fetch your taxonomy dataframe from Supabase or load it locally:
-  # taxonomy_df = fetch_master_taxonomy_from_supabase()
-  # For testing, you can pass your loaded taxonomy dataframe here.
+  if st.button("🚀 Run AI Classification"):
+    if "content_snippet" not in df_input.columns:
+      st.error(
+          "Error: Uploaded file must contain a column named 'content_snippet'."
+      )
+    else:
+      with st.spinner(
+          "Processing articles through Gemini using your master taxonomy"
+          " rules..."
+      ):
+        output_df = classify_batch_articles(df_input, taxonomy_df)
 
- # Make sure you load your taxonomy DataFrame (either locally or from Supabase)
-# For example, if you have your taxonomy file in your repo:
-@st.cache_data
-def load_taxonomy():
-  return pd.read_excel("NEW SA Topic CAT Gemini.xlsx")
+      st.success("✨ Classification complete!")
+      st.dataframe(output_df)
 
-
-taxonomy_df = load_taxonomy()
-
-if st.button("🚀 Run AI Classification"):
-  if "content_snippet" not in df_input.columns:
-    st.error(
-        "Error: Uploaded file must contain a column named 'content_snippet'."
-    )
-  else:
-    with st.spinner(
-        "Processing articles through Gemini using your master taxonomy"
-        " rules..."
-    ):
-      output_df = classify_batch_articles(df_input, taxonomy_df)
-
-    st.success("✨ Classification complete!")
-    st.dataframe(output_df)
-
-    # Add a download button for the categorized results
-    csv_data = output_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="📥 Download Categorized Results as CSV",
-        data=csv_data,
-        file_name="categorized_articles_output.csv",
-        mime="text/csv",
-    )
+      # CSV Download Button
+      csv_data = output_df.to_csv(index=False).encode("utf-8")
+      st.download_button(
+          label="📥 Download Categorized Results as CSV",
+          data=csv_data,
+          file_name="categorized_articles_output.csv",
+          mime="text/csv",
+      )
 
 
 

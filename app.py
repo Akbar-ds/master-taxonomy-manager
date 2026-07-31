@@ -1,5 +1,8 @@
 from datetime import date, datetime, timedelta
+import json
+import time
 from google import genai
+from google.genai import types
 import pandas as pd
 from streamlit_supabase_auth import login_form
 from supabase import Client, create_client
@@ -20,20 +23,15 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Main Background with a soft gradient look */
     .stApp {
         background: linear-gradient(135deg, #f0f4f8 0%, #f8fafc 100%);
         font-family: 'Inter', sans-serif;
     }
-    
-    /* Header Styling */
     h1 {
         color: #0f172a;
         font-weight: 800;
         letter-spacing: -0.5px;
     }
-    
-    /* Container/Card Styling with subtle shadows */
     div[data-testid="stVerticalBlock"] > div[style*="border"] {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -41,8 +39,6 @@ st.markdown(
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.03), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
         transition: all 0.3s ease;
     }
-    
-    /* Button Micro-animations & Aesthetics */
     .stButton>button {
         background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
         color: white;
@@ -74,8 +70,11 @@ def get_gemini_client():
 
 @st.cache_data
 def load_taxonomy():
-  xls = pd.ExcelFile("NEW SA Topic CAT Gemini.xlsx")
-  return pd.read_excel(xls, xls.sheet_names[0])
+  try:
+    xls = pd.ExcelFile("NEW SA Topic CAT Gemini.xlsx")
+    return pd.read_excel(xls, xls.sheet_names[0])
+  except FileNotFoundError:
+    return None
 
 
 @st.cache_resource
@@ -88,7 +87,19 @@ def init_connection() -> Client:
 supabase = init_connection()
 taxonomy_df = load_taxonomy()
 
-# Allowed options for dropdown validations
+if taxonomy_df is None:
+  st.warning(
+      "⚠️ 'NEW SA Topic CAT Gemini.xlsx' was not found in the repository."
+      " Please upload your taxonomy file below to proceed."
+  )
+  uploaded_tax_file = st.file_uploader(
+      "Upload Master Taxonomy Excel", type=["xlsx"]
+  )
+  if uploaded_tax_file:
+    taxonomy_df = pd.read_excel(uploaded_tax_file)
+  else:
+    st.stop()
+
 ALLOWED_TONALITY_OPTIONS = [
     "All Tonalities",
     "Only Positive",
@@ -147,16 +158,6 @@ app_mode = st.sidebar.selectbox(
 # ==========================================
 @st.dialog("📝 Add New Taxonomy Entry")
 def add_taxonomy_modal(categories, subcategories, ALLOWED_TONALITY_OPTIONS):
-  st.markdown(
-      "<p style='font-size: 13px; color: #64748b;'>Complete the form below to"
-      " register a new master taxonomy configuration.</p>",
-      unsafe_allow_html=True,
-  )
-  st.warning(
-      "⚠️ **Authorization Notice:** Alert First Consult to your TL before"
-      " making changes."
-  )
-
   with st.form("new_entry_form", clear_on_submit=True):
     op_name = st.text_input(
         "Your Name / User ID *", placeholder="Enter your full name..."
@@ -199,52 +200,19 @@ def add_taxonomy_modal(categories, subcategories, ALLOWED_TONALITY_OPTIONS):
         st.error("Please fill out your Name and the Topic field.")
       else:
         try:
-          current_db_data = fetch_master_data()
-          norm_category = form_category.strip().lower()
-          norm_subcategory = (
-              form_subcategory.strip().lower()
-              if form_subcategory and form_subcategory != ""
-              else ""
-          )
-          norm_topic = cleaned_topic.lower()
-          norm_tonality = form_tonality.strip().lower()
-
-          is_duplicate = False
-          for entry in current_db_data:
-            db_cat = (entry.get("category") or "").strip().lower()
-            db_subcat = (entry.get("subcategory") or "").strip().lower()
-            db_top = (entry.get("topic") or "").strip().lower()
-            db_ton = (entry.get("tonality") or "").strip().lower()
-
-            if (
-                db_cat == norm_category
-                and db_subcat == norm_subcategory
-                and db_top == norm_topic
-                and db_ton == norm_tonality
-            ):
-              is_duplicate = True
-              break
-
-          if is_duplicate:
-            st.error(
-                f"❌ **Duplicate Error:** '{cleaned_topic}' under this exact"
-                " category structure already exists."
-            )
-          else:
-            supabase.table("taxonomy_entries").insert({
-                "category": form_category,
-                "subcategory": form_subcategory
-                if form_subcategory != ""
-                else None,
-                "topic": cleaned_topic,
-                "tonality": form_tonality,
-                "submitted_by": cleaned_name,
-            }).execute()
-            st.success("✨ Entry successfully added and synced!")
-            st.rerun()
+          supabase.table("taxonomy_entries").insert({
+              "category": form_category,
+              "subcategory": form_subcategory
+              if form_subcategory != ""
+              else None,
+              "topic": cleaned_topic,
+              "tonality": form_tonality,
+              "submitted_by": cleaned_name,
+          }).execute()
+          st.success("✨ Entry successfully added and synced!")
+          st.rerun()
         except Exception as e:
           st.error(f"Failed to add entry: {e}")
-
     if cancelled:
       st.rerun()
 
@@ -253,15 +221,6 @@ def add_taxonomy_modal(categories, subcategories, ALLOWED_TONALITY_OPTIONS):
 def edit_taxonomy_modal(
     item, categories, subcategories, ALLOWED_TONALITY_OPTIONS
 ):
-  st.markdown(
-      "<p style='font-size: 13px; color: #64748b;'>Modify the taxonomy details"
-      " below. Changes update the database timestamp and record modifier.</p>",
-      unsafe_allow_html=True,
-  )
-  st.warning(
-      "⚠️ **Confirmation Required:** Are you sure you want to make this change?"
-  )
-
   with st.form("edit_entry_form", clear_on_submit=False):
     editor_name = st.text_input(
         "Your Name / User ID (Editor) *", placeholder="Enter your full name..."
@@ -329,7 +288,6 @@ def edit_taxonomy_modal(
           st.rerun()
         except Exception as e:
           st.error(f"Failed to update entry in database: {e}")
-
     if cancel_button:
       st.rerun()
 
@@ -342,7 +300,7 @@ if app_mode == "🤖 Bulk AI Classifier Pipeline":
   st.markdown(
       "<p style='font-size: 15px; color: #475569;'>Upload a spreadsheet"
       " containing article snippets to automatically categorize them using"
-      " Gemini and your master taxonomy rules.</p>",
+      " Gemini 3.5 Flash and JSON parsing rules.</p>",
       unsafe_allow_html=True,
   )
   st.divider()
@@ -352,12 +310,16 @@ if app_mode == "🤖 Bulk AI Classifier Pipeline":
   )
 
   if uploaded_file:
-    if uploaded_file.name.endswith(".csv"):
-      df_input = pd.read_csv(uploaded_file)
-    else:
-      df_input = pd.read_excel(uploaded_file)
-
+    df_input = (
+        pd.read_csv(uploaded_file)
+        if uploaded_file.name.endswith(".csv")
+        else pd.read_excel(uploaded_file)
+    )
     st.write("Preview of Uploaded Data:", df_input.head())
+
+    batch_size = st.slider(
+        "Batch Size (Articles per AI Request)", min_value=1, max_value=10, value=5
+    )
 
     if st.button("🚀 Run AI Classification"):
       if "content_snippet" not in df_input.columns:
@@ -367,78 +329,82 @@ if app_mode == "🤖 Bulk AI Classifier Pipeline":
         )
       else:
 
-        def classify_batch_articles(df_articles, taxonomy_df):
+        def classify_in_batches(df_articles, taxonomy_df, batch_size):
           client = get_gemini_client()
           taxonomy_reference = taxonomy_df.to_string(index=False)
           results = []
           progress_bar = st.progress(0)
           total_rows = len(df_articles)
 
-          for idx, row in df_articles.iterrows():
-            article_content = str(row.get("content_snippet", ""))
+          for i in range(0, total_rows, batch_size):
+            batch_df = df_articles.iloc[i : i + batch_size]
+            articles_payload = []
+            for idx, row in batch_df.iterrows():
+              articles_payload.append({
+                  "index": int(idx),
+                  "content": str(row.get("content_snippet", "")),
+              })
+
             prompt = f"""
                     You are an expert media analyst and taxonomy classification engine.
-                    Analyze the following article content and categorize it strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules provided in the Master Taxonomy Reference below.
+                    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
 
                     ### Master Taxonomy Reference:
                     {taxonomy_reference}
 
-                    ### Strict Rules:
-                    1. Choose the Category, Subcategory, Topic, and Tonality strictly from the reference list.
-                    2. If the article does not fit any topic in the reference list, output Category as "Cannot analyze as no relevant topic found", and leave Subcategory and Topic as "N/A".
-                    3. Provide an "Overall Tonality" column indicating the general tone (Positive, Negative, Neutral, Mixed).
+                    ### Articles Batch to Classify:
+                    {json.dumps(articles_payload)}
 
-                    ### Article Content:
-                    {article_content}
-
-                    Return your response strictly in this format:
-                    Category: [Value]
-                    Subcategory: [Value]
-                    Topic: [Value]
-                    Tonality: [Value]
-                    Overall Tonality: [Value]
+                    Return your response strictly as a valid JSON array of objects with keys:
+                    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality".
                     """
-            try:
-              response = client.models.generate_content(
-                  model="imagen-4.0-generate-001", contents=prompt
-              )
-              text = response.text
-              parsed = {}
-              for line in text.split("\n"):
-                if ":" in line:
-                  parts = line.split(":", 1)
-                  parsed[parts[0].strip()] = parts[1].strip()
 
-              results.append({
-                  "Category": parsed.get("Category", "Error"),
-                  "Subcategory": parsed.get("Subcategory", "N/A"),
-                  "Topic": parsed.get("Topic", "N/A"),
-                  "Tonality": parsed.get("Tonality", "N/A"),
-                  "Overall Tonality": parsed.get("Overall Tonality", "N/A"),
-              })
-            except Exception as e:
-                st.write(f"Detailed Debug Error: {e}")  # Temporarily see exact error
-                results.append({
-                    "Category": "Error",
-                    "Subcategory": str(e),
-                    "Topic": "N/A",
-                    "Tonality": "N/A",
-                    "Overall Tonality": "N/A",
-             })
-            progress_bar.progress((idx + 1) / total_rows)
+            parsed_batch = None
+            retries = 3
+            for attempt in range(retries):
+              try:
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json", temperature=0.1
+                    ),
+                )
+                parsed_batch = json.loads(response.text)
+                break
+              except Exception as e:
+                if attempt == retries - 1:
+                  for item in articles_payload:
+                    parsed_batch = parsed_batch or []
+                    parsed_batch.append({
+                        "index": item["index"],
+                        "Category": "Error",
+                        "Subcategory": str(e),
+                        "Topic": "N/A",
+                        "Tonality": "N/A",
+                        "Overall Tonality": "N/A",
+                    })
+                else:
+                  time.sleep(2**attempt)
 
+            if isinstance(parsed_batch, list):
+              results.extend(parsed_batch)
+            progress_bar.progress(min((i + batch_size) / total_rows, 1.0))
+
+          res_df = pd.DataFrame(results)
+          if not res_df.empty and "index" in res_df.columns:
+            res_df = res_df.sort_values(by="index").reset_index(drop=True)
+            res_df = res_df.drop(columns=["index"])
           return pd.concat(
-              [df_articles.reset_index(drop=True), pd.DataFrame(results)],
-              axis=1,
+              [df_articles.reset_index(drop=True), res_df], axis=1
           )
 
         with st.spinner(
-            "Processing articles through Gemini using your master taxonomy"
-            " rules..."
+            "Processing batch chunks through Gemini 3.5 Flash..."
         ):
-          output_df = classify_batch_articles(df_input, taxonomy_df)
+          output_df = classify_in_batches(df_input, taxonomy_df, batch_size)
 
-        st.success("✨ Classification complete!")
+        st.success("✨ Batch classification complete!")
         st.dataframe(output_df)
 
         csv_data = output_df.to_csv(index=False).encode("utf-8")
@@ -450,7 +416,6 @@ if app_mode == "🤖 Bulk AI Classifier Pipeline":
         )
 
 else:
-  # Header Layout for Taxonomy Manager
   st.markdown("<h1>🌍 Master Taxonomy Manager</h1>", unsafe_allow_html=True)
   st.markdown(
       "<p style='font-size: 16px; color: #475569;'>Seamlessly search, filter,"
@@ -463,7 +428,6 @@ else:
   with col_btn1:
     if st.button("➕ Add New Entry", use_container_width=True):
       add_taxonomy_modal(categories, subcategories, ALLOWED_TONALITY_OPTIONS)
-
   with col_btn2:
     if data:
       df_export = pd.DataFrame(data)
@@ -557,9 +521,6 @@ else:
             start_d, end_d = custom_date_range
             if start_d <= item_date <= end_d:
               filtered_by_date.append(item)
-          elif len(custom_date_range) == 1:
-            if item_date == custom_date_range[0]:
-              filtered_by_date.append(item)
       except Exception:
         pass
     filtered_data = filtered_by_date
@@ -573,8 +534,7 @@ else:
     st.markdown(
         f"<div style='text-align: right; background-color: #e0f2fe;"
         f" color: #0369a1; padding: 6px 14px; border-radius: 20px; font-weight:"
-        f" bold; font-size: 13px; box-shadow: inset 0 1px 2px"
-        f" rgba(0,0,0,0.05);'>📊 {len(filtered_data)} entries found</div>",
+        f" bold; font-size: 13px;'>📊 {len(filtered_data)} entries found</div>",
         unsafe_allow_html=True,
     )
 

@@ -356,8 +356,8 @@ if app_mode == "🤖 MoRTH AI":
   st.subheader("🤖 HELLO I AM MoRTH AI")
   st.markdown(
       "<p style='font-size: 15px; color: #475569;'>Choose whether to upload a"
-      " spreadsheet or paste your content snippets directly below for"
-      " instant AI classification.</p>",
+      " spreadsheet or add content snippets dynamically below for instant"
+      " AI classification.</p>",
       unsafe_allow_html=True,
   )
   st.divider()
@@ -365,7 +365,7 @@ if app_mode == "🤖 MoRTH AI":
   # Choose Input Method
   input_method = st.radio(
       "Select Input Source",
-      ["📁 Upload Spreadsheet (CSV/Excel)", "✍️ Paste Content Directly"],
+      ["📁 Upload Spreadsheet (CSV/Excel)", "✍️ Add Contents Sequentially"],
       horizontal=True,
   )
 
@@ -384,32 +384,51 @@ if app_mode == "🤖 MoRTH AI":
       st.write("Preview of Uploaded Data:", df_input.head())
 
   else:
-    st.markdown("### ✍️ Enter Content Snippets")
+    st.markdown("### ✍️ Sequential Content Input")
     st.markdown(
-        "<small style='color: #64748b;'>Enter multiple articles. Put each"
-        " independent article snippet on a new line.</small>",
+        "<small style='color: #64748b;'>Add each content snippet one by one."
+        " Type or paste your snippet and click 'Add Content Item'.</small>",
         unsafe_allow_html=True,
     )
-    manual_text_input = st.text_area(
-        "Content Snippets (One per line or paragraph)",
-        placeholder=(
-            "Enter snippet 1 here...\nEnter snippet 2 here...\nEnter snippet 3"
-            " here..."
-        ),
-        height=200,
-    )
 
-    if manual_text_input.strip():
-      snippets = [
-          line.strip()
-          for line in manual_text_input.split("\n")
-          if line.strip()
-      ]
-      if snippets:
-        df_input = pd.DataFrame({"content_snippet": snippets})
-        st.info(
-            f"📊 Detected **{len(df_input)}** snippet(s) ready for analysis."
+    if "sequential_snippets" not in st.session_state:
+      st.session_state.sequential_snippets = []
+
+    with st.form("sequential_form", clear_on_submit=True):
+      current_input = st.text_area(
+          "Enter content snippet",
+          placeholder=(
+              "Paste your content snippet here, then click Add Content Item..."
+          ),
+          height=100,
+      )
+      add_item_btn = st.form_submit_button("➕ Add Content Item")
+
+      if add_item_btn:
+        if current_input.strip():
+          st.session_state.sequential_snippets.append(current_input.strip())
+          st.success(
+              f"Added item #{len(st.session_state.sequential_snippets)} successfully!"
+          )
+        else:
+          st.warning("Please enter some content before adding.")
+
+    if st.session_state.sequential_snippets:
+      st.markdown("#### 📋 Added Contents Queue:")
+      for idx, snip in enumerate(st.session_state.sequential_snippets):
+        st.markdown(
+            f"**{idx + 1}.** {snip[:120]}{'...' if len(snip) > 120 else ''}"
         )
+
+      col_reset, _ = st.columns([1, 4])
+      with col_reset:
+        if st.button("🗑️ Clear All Items"):
+          st.session_state.sequential_snippets = []
+          st.rerun()
+
+      df_input = pd.DataFrame(
+          {"content_snippet": st.session_state.sequential_snippets}
+      )
 
   if df_input is not None and not df_input.empty:
     batch_size = st.slider(
@@ -438,7 +457,6 @@ if app_mode == "🤖 MoRTH AI":
                   "content": str(row.get("content_snippet", "")),
               })
 
-            # Call the cached batch function by passing JSON string
             articles_json_str = json.dumps(articles_payload)
             parsed_batch = classify_batch_articles(
                 articles_json_str, taxonomy_reference

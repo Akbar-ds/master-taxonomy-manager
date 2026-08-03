@@ -382,50 +382,59 @@ if app_mode == "🤖 MoRTH AI":
                   "index": int(idx),
                   "content": str(row.get("content_snippet", "")),
               })
+                
+@st.cache_data
+def classify_batch_articles(articles_json_str, taxonomy_reference):
+  """Calls Gemini API for a batch of articles and caches the result."""
+  client = get_gemini_client()
+  articles_payload = json.loads(articles_json_str)
 
-            prompt = f"""
-                    You are an expert media analyst and taxonomy classification engine.
-                    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference,
-                    If the content includes name of the expressway or highway then also give the National Highway number or the Nation Expressway name as per mentioned in the content if the content only has Highway name and highway number is not mentioned then search and get the highway number and give the exact highway number.
-                    Also the main location of the article should also be tagged if there are multiple locations in the content consider only the main location upon which the article is mainly about and then give the location and also the exact state of the location to which it belongs
+  prompt = f"""
+    You are an expert media analyst and taxonomy classification engine.
+    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
+    
+    Special Instructions:
+    1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
+    2. Identify the main location the article is primarily about (if there are multiple locations, choose only the core focus location) along with its exact state.
 
-                    ### Master Taxonomy Reference:
-                    {taxonomy_reference}
+    ### Master Taxonomy Reference:
+    {taxonomy_reference}
 
-                    ### Articles Batch to Classify:
-                    {json.dumps(articles_payload)}
+    ### Articles Batch to Classify:
+    {json.dumps(articles_payload)}
 
-                    Return your response strictly as a valid JSON array of objects with keys:
-                    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO", "Location".
-                    """
+    Return your response strictly as a valid JSON array of objects with keys:
+    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO", "Location".
+    """
 
-            parsed_batch = None
-            retries = 3
-            for attempt in range(retries):
-              try:
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json", temperature=0.1
-                    ),
-                )
-                parsed_batch = json.loads(response.text)
-                break
-              except Exception as e:
-                if attempt == retries - 1:
-                  for item in articles_payload:
-                    parsed_batch = parsed_batch or []
-                    parsed_batch.append({
-                        "index": item["index"],
-                        "Category": "Error",
-                        "Subcategory": str(e),
-                        "Topic": "N/A",
-                        "Tonality": "N/A",
-                        "Overall Tonality": "N/A",
-                    })
-                else:
-                  time.sleep(2**attempt)
+  retries = 3
+  for attempt in range(retries):
+    try:
+      response = client.models.generate_content(
+          model="gemini-3.5-flash",
+          contents=prompt,
+          config=types.GenerateContentConfig(
+              response_mime_type="application/json", temperature=0.1
+          ),
+      )
+      return json.loads(response.text)
+    except Exception as e:
+      if attempt == retries - 1:
+        error_results = []
+        for item in articles_payload:
+          error_results.append({
+              "index": item["index"],
+              "Category": "Error",
+              "Subcategory": str(e),
+              "Topic": "N/A",
+              "Tonality": "N/A",
+              "Overall Tonality": "N/A",
+              "NH NO": "N/A",
+              "Location": "N/A",
+          })
+        return error_results
+      else:
+        time.sleep(2**attempt)
 
             if isinstance(parsed_batch, list):
               results.extend(parsed_batch)

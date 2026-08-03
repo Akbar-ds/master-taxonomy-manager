@@ -197,7 +197,7 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
           })
         return error_results
       else:
-        time.sleep(2**exponent := 2**attempt)
+        time.sleep(2**attempt)
 
 
 # ==========================================
@@ -607,11 +607,11 @@ else:
         elif date_filter_option == "One Month Old (Last 30 Days)":
           if now_utc - created_dt <= timedelta(days=30):
             filtered_by_date.append(item)
-        elif date_filter_option == "Custom Range" and custom_date_range:
-          if len(custom_date_range) == 2:
-            start_d, end_d = custom_date_range
-            if start_d <= item_date <= end_d:
-              filtered_by_date.append(item)
+          elif date_filter_option == "Custom Range" and custom_date_range:
+            if len(custom_date_range) == 2:
+              start_d, end_d = custom_date_range
+              if start_d <= item_date <= end_d:
+                filtered_by_date.append(item)
       except Exception:
         pass
     filtered_data = filtered_by_date

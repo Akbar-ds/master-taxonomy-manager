@@ -144,7 +144,64 @@ topics = sorted(
 
 
 # ==========================================
-# 4. SIDEBAR NAVIGATION
+# 4. AI BATCH CLASSIFICATION CACHED FUNCTION
+# ==========================================
+@st.cache_data
+def classify_batch_articles(articles_json_str, taxonomy_reference):
+  """Calls Gemini API for a batch of articles and caches the result."""
+  client = get_gemini_client()
+  articles_payload = json.loads(articles_json_str)
+
+  prompt = f"""
+    You are an expert media analyst and taxonomy classification engine.
+    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
+    
+    Special Instructions:
+    1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
+    2. Identify the main location the article is primarily about (if there are multiple locations, choose only the core focus location) along with its exact state.
+
+    ### Master Taxonomy Reference:
+    {taxonomy_reference}
+
+    ### Articles Batch to Classify:
+    {json.dumps(articles_payload)}
+
+    Return your response strictly as a valid JSON array of objects with keys:
+    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO", "Location".
+    """
+
+  retries = 3
+  for attempt in range(retries):
+    try:
+      response = client.models.generate_content(
+          model="gemini-3.5-flash",
+          contents=prompt,
+          config=types.GenerateContentConfig(
+              response_mime_type="application/json", temperature=0.1
+          ),
+      )
+      return json.loads(response.text)
+    except Exception as e:
+      if attempt == retries - 1:
+        error_results = []
+        for item in articles_payload:
+          error_results.append({
+              "index": item["index"],
+              "Category": "Error",
+              "Subcategory": str(e),
+              "Topic": "N/A",
+              "Tonality": "N/A",
+              "Overall Tonality": "N/A",
+              "NH NO": "N/A",
+              "Location": "N/A",
+          })
+        return error_results
+      else:
+        time.sleep(2**attempt)
+
+
+# ==========================================
+# 5. SIDEBAR NAVIGATION
 # ==========================================
 st.sidebar.title("🧭 Explore")
 app_mode = st.sidebar.selectbox(
@@ -154,7 +211,7 @@ app_mode = st.sidebar.selectbox(
 
 
 # ==========================================
-# 5. MODAL DIALOGS
+# 6. MODAL DIALOGS
 # ==========================================
 @st.dialog("📝 Add New Taxonomy Entry")
 def add_taxonomy_modal(categories, subcategories, ALLOWED_TONALITY_OPTIONS):
@@ -293,7 +350,7 @@ def edit_taxonomy_modal(
 
 
 # ==========================================
-# 6. MAIN APP INTERFACE ROUTING
+# 7. MAIN APP INTERFACE ROUTING
 # ==========================================
 if app_mode == "🤖 MoRTH AI":
   st.subheader("🤖 HELLO I AM MoRTH AI")
@@ -343,7 +400,6 @@ if app_mode == "🤖 MoRTH AI":
     )
 
     if manual_text_input.strip():
-      # Split by newlines and filter out empty lines
       snippets = [
           line.strip()
           for line in manual_text_input.split("\n")
@@ -368,7 +424,6 @@ if app_mode == "🤖 MoRTH AI":
       else:
 
         def classify_in_batches(df_articles, taxonomy_df, batch_size):
-          client = get_gemini_client()
           taxonomy_reference = taxonomy_df.to_string(index=False)
           results = []
           progress_bar = st.progress(0)
@@ -382,59 +437,12 @@ if app_mode == "🤖 MoRTH AI":
                   "index": int(idx),
                   "content": str(row.get("content_snippet", "")),
               })
-                
-@st.cache_data
-def classify_batch_articles(articles_json_str, taxonomy_reference):
-  """Calls Gemini API for a batch of articles and caches the result."""
-  client = get_gemini_client()
-  articles_payload = json.loads(articles_json_str)
 
-  prompt = f"""
-    You are an expert media analyst and taxonomy classification engine.
-    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
-    
-    Special Instructions:
-    1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
-    2. Identify the main location the article is primarily about (if there are multiple locations, choose only the core focus location) along with its exact state.
-
-    ### Master Taxonomy Reference:
-    {taxonomy_reference}
-
-    ### Articles Batch to Classify:
-    {json.dumps(articles_payload)}
-
-    Return your response strictly as a valid JSON array of objects with keys:
-    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO", "Location".
-    """
-
-  retries = 3
-  for attempt in range(retries):
-    try:
-      response = client.models.generate_content(
-          model="gemini-3.5-flash",
-          contents=prompt,
-          config=types.GenerateContentConfig(
-              response_mime_type="application/json", temperature=0.1
-          ),
-      )
-      return json.loads(response.text)
-    except Exception as e:
-      if attempt == retries - 1:
-        error_results = []
-        for item in articles_payload:
-          error_results.append({
-              "index": item["index"],
-              "Category": "Error",
-              "Subcategory": str(e),
-              "Topic": "N/A",
-              "Tonality": "N/A",
-              "Overall Tonality": "N/A",
-              "NH NO": "N/A",
-              "Location": "N/A",
-          })
-        return error_results
-      else:
-        time.sleep(2**attempt)
+            # Call the cached batch function by passing JSON string
+            articles_json_str = json.dumps(articles_payload)
+            parsed_batch = classify_batch_articles(
+                articles_json_str, taxonomy_reference
+            )
 
             if isinstance(parsed_batch, list):
               results.extend(parsed_batch)

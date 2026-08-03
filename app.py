@@ -296,6 +296,7 @@ def edit_taxonomy_modal(
 # 6. MAIN APP INTERFACE ROUTING
 # ==========================================
 if app_mode == "🤖 MoRTH AI":
+  st.subheader("🤖 HELLO I AM MoRTH AI")
   st.markdown(
       "<p style='font-size: 15px; color: #475569;'>Choose whether to upload a"
       " spreadsheet or paste your content snippets directly below for"

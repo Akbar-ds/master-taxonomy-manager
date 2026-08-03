@@ -385,7 +385,8 @@ if app_mode == "🤖 MoRTH AI":
 
             prompt = f"""
                     You are an expert media analyst and taxonomy classification engine.
-                    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
+                    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference,
+                    If the content includes name of the expressway or highway then also give the National Highway number or the Nation Expressway name as per mentioned in the content.
 
                     ### Master Taxonomy Reference:
                     {taxonomy_reference}
@@ -394,7 +395,7 @@ if app_mode == "🤖 MoRTH AI":
                     {json.dumps(articles_payload)}
 
                     Return your response strictly as a valid JSON array of objects with keys:
-                    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality".
+                    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO".
                     """
 
             parsed_batch = None

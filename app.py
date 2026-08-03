@@ -149,7 +149,7 @@ topics = sorted(
 st.sidebar.title("🧭 Navigation")
 app_mode = st.sidebar.selectbox(
     "Choose Application Mode",
-    ["📋 Master Taxonomy Manager", "🤖 Bulk AI Classifier Pipeline"],
+    ["📋 Master Taxonomy Manager", "🤖 MoRTH AI"],
 )
 
 
@@ -295,12 +295,11 @@ def edit_taxonomy_modal(
 # ==========================================
 # 6. MAIN APP INTERFACE ROUTING
 # ==========================================
-if app_mode == "🤖 Bulk AI Classifier Pipeline":
-  st.subheader("🤖 Bulk Article Classification Pipeline")
+if app_mode == "🤖 MoRTH AI":
+  st.subheader("🤖 HELLO!! I AM MoRTH AI ")
   st.markdown(
-      "<p style='font-size: 15px; color: #475569;'>Upload a spreadsheet"
-      " containing article snippets to automatically categorize them using"
-      " Gemini 3.5 Flash and JSON parsing rules.</p>",
+      "<p style='font-size: 20px; color: #475569;'>Upload a spreadsheet"
+      " containing article snippets and get them analysed for you.</p>",
       unsafe_allow_html=True,
   )
   st.divider()

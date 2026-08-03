@@ -386,7 +386,8 @@ if app_mode == "🤖 MoRTH AI":
             prompt = f"""
                     You are an expert media analyst and taxonomy classification engine.
                     Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference,
-                    If the content includes name of the expressway or highway then also give the National Highway number or the Nation Expressway name as per mentioned in the content.
+                    If the content includes name of the expressway or highway then also give the National Highway number or the Nation Expressway name as per mentioned in the content if the content only has Highway name and highway number is not mentioned then search and get the highway number and give the exact highway number.
+                    Also the main location of the article should also be tagged if there are multiple locations in the content consider only the main location upon which the article is mainly about and then give the location and also the exact state of the location to which it belongs
 
                     ### Master Taxonomy Reference:
                     {taxonomy_reference}
@@ -395,7 +396,7 @@ if app_mode == "🤖 MoRTH AI":
                     {json.dumps(articles_payload)}
 
                     Return your response strictly as a valid JSON array of objects with keys:
-                    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO".
+                    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO", "Location".
                     """
 
             parsed_batch = None

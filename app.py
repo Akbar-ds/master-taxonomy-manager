@@ -197,7 +197,7 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
           })
         return error_results
       else:
-        time.sleep(2**attempt)
+        time.sleep(2**exponent := 2**attempt)
 
 
 # ==========================================
@@ -386,9 +386,8 @@ if app_mode == "🤖 MoRTH AI":
   else:
     st.markdown("### ✍️ Sequential Content Input")
     st.markdown(
-        "<small style='color: #64748b;'>Add each content snippet one by one."
-        " Type or paste your snippet and click 'Add Content Item'. Your queue"
-        " is securely stored in session state.</small>",
+        "<small style='color: #64748b;'>Paste your content snippet below and"
+        " click the button to add it to your queue.</small>",
         unsafe_allow_html=True,
     )
 
@@ -397,27 +396,31 @@ if app_mode == "🤖 MoRTH AI":
       st.session_state.sequential_snippets = []
     if "cached_output_df" not in st.session_state:
       st.session_state.cached_output_df = None
+    if "current_snippet_input" not in st.session_state:
+      st.session_state.current_snippet_input = ""
 
-    with st.form("sequential_form", clear_on_submit=True):
-      current_input = st.text_area(
-          "Enter content snippet",
-          placeholder=(
-              "Paste your content snippet here, then click Add Content Item..."
-          ),
-          height=100,
-      )
-      add_item_btn = st.form_submit_button("➕ Add Content Item")
+    # Using standard text_area bound to session state (no form required)
+    st.text_area(
+        "Enter content snippet",
+        key="current_snippet_input",
+        placeholder="Paste your content snippet here...",
+        height=100,
+    )
 
-      if add_item_btn:
-        if current_input.strip():
-          st.session_state.sequential_snippets.append(current_input.strip())
-          # Clear out old analysis result if a new item is added
-          st.session_state.cached_output_df = None
-          st.success(
-              f"Added item #{len(st.session_state.sequential_snippets)} successfully!"
-          )
-        else:
-          st.warning("Please enter some content before adding.")
+    col_btn1, _ = st.columns([1, 4])
+    with col_btn1:
+      add_item_btn = st.button("➕ Add Content Item", use_container_width=True)
+
+    if add_item_btn:
+      snippet_text = st.session_state.current_snippet_input.strip()
+      if snippet_text:
+        st.session_state.sequential_snippets.append(snippet_text)
+        st.session_state.cached_output_df = None
+        # Clear the text box state and rerun to update UI cleanly
+        st.session_state.current_snippet_input = ""
+        st.rerun()
+      else:
+        st.warning("Please enter some content before adding.")
 
     if st.session_state.sequential_snippets:
       st.markdown("#### 📋 Added Contents Queue:")
@@ -604,11 +607,11 @@ else:
         elif date_filter_option == "One Month Old (Last 30 Days)":
           if now_utc - created_dt <= timedelta(days=30):
             filtered_by_date.append(item)
-          elif date_filter_option == "Custom Range" and custom_date_range:
-            if len(custom_date_range) == 2:
-              start_d, end_d = custom_date_range
-              if start_d <= item_date <= end_d:
-                filtered_by_date.append(item)
+        elif date_filter_option == "Custom Range" and custom_date_range:
+          if len(custom_date_range) == 2:
+            start_d, end_d = custom_date_range
+            if start_d <= item_date <= end_d:
+              filtered_by_date.append(item)
       except Exception:
         pass
     filtered_data = filtered_by_date

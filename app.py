@@ -146,7 +146,7 @@ topics = sorted(
 # ==========================================
 # 4. SIDEBAR NAVIGATION
 # ==========================================
-st.sidebar.title("🧭 Navigation")
+st.sidebar.title("🧭 Explore")
 app_mode = st.sidebar.selectbox(
     "Choose Application Mode",
     ["📋 Master Taxonomy Manager", "🤖 MoRTH AI"],
@@ -296,26 +296,65 @@ def edit_taxonomy_modal(
 # 6. MAIN APP INTERFACE ROUTING
 # ==========================================
 if app_mode == "🤖 MoRTH AI":
-  st.subheader("🤖 HELLO!! I AM MoRTH AI ")
   st.markdown(
-      "<p style='font-size: 20px; color: #475569;'>Upload a spreadsheet"
-      " containing article snippets and get them analysed for you.</p>",
+      "<p style='font-size: 15px; color: #475569;'>Choose whether to upload a"
+      " spreadsheet or paste your content snippets directly below for"
+      " instant AI classification.</p>",
       unsafe_allow_html=True,
   )
   st.divider()
 
-  uploaded_file = st.file_uploader(
-      "Upload Excel or CSV containing your articles", type=["xlsx", "csv"]
+  # Choose Input Method
+  input_method = st.radio(
+      "Select Input Source",
+      ["📁 Upload Spreadsheet (CSV/Excel)", "✍️ Paste Content Directly"],
+      horizontal=True,
   )
 
-  if uploaded_file:
-    df_input = (
-        pd.read_csv(uploaded_file)
-        if uploaded_file.name.endswith(".csv")
-        else pd.read_excel(uploaded_file)
-    )
-    st.write("Preview of Uploaded Data:", df_input.head())
+  df_input = None
 
+  if input_method == "📁 Upload Spreadsheet (CSV/Excel)":
+    uploaded_file = st.file_uploader(
+        "Upload Excel or CSV containing your articles", type=["xlsx", "csv"]
+    )
+    if uploaded_file:
+      df_input = (
+          pd.read_csv(uploaded_file)
+          if uploaded_file.name.endswith(".csv")
+          else pd.read_excel(uploaded_file)
+      )
+      st.write("Preview of Uploaded Data:", df_input.head())
+
+  else:
+    st.markdown("### ✍️ Enter Content Snippets")
+    st.markdown(
+        "<small style='color: #64748b;'>Enter multiple articles. Put each"
+        " independent article snippet on a new line.</small>",
+        unsafe_allow_html=True,
+    )
+    manual_text_input = st.text_area(
+        "Content Snippets (One per line or paragraph)",
+        placeholder=(
+            "Enter snippet 1 here...\nEnter snippet 2 here...\nEnter snippet 3"
+            " here..."
+        ),
+        height=200,
+    )
+
+    if manual_text_input.strip():
+      # Split by newlines and filter out empty lines
+      snippets = [
+          line.strip()
+          for line in manual_text_input.split("\n")
+          if line.strip()
+      ]
+      if snippets:
+        df_input = pd.DataFrame({"content_snippet": snippets})
+        st.info(
+            f"📊 Detected **{len(df_input)}** snippet(s) ready for analysis."
+        )
+
+  if df_input is not None and not df_input.empty:
     batch_size = st.slider(
         "Batch Size (Articles per AI Request)", min_value=1, max_value=10, value=5
     )
@@ -323,8 +362,7 @@ if app_mode == "🤖 MoRTH AI":
     if st.button("🚀 Run AI Classification"):
       if "content_snippet" not in df_input.columns:
         st.error(
-            "Error: Uploaded file must contain a column named"
-            " 'content_snippet'."
+            "Error: Data must contain a column named 'content_snippet'."
         )
       else:
 
@@ -403,7 +441,7 @@ if app_mode == "🤖 MoRTH AI":
         ):
           output_df = classify_in_batches(df_input, taxonomy_df, batch_size)
 
-        st.success("✨ Batch classification complete!")
+        st.success("✨ Classification complete!")
         st.dataframe(output_df)
 
         csv_data = output_df.to_csv(index=False).encode("utf-8")

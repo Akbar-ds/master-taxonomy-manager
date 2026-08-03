@@ -356,7 +356,7 @@ if app_mode == "🤖 MoRTH AI":
   st.subheader("🤖 HELLO I AM MoRTH AI")
   st.markdown(
       "<p style='font-size: 15px; color: #475569;'>Choose whether to upload a"
-      " spreadsheet or add content snippets dynamically below for instant"
+      " spreadsheet or add content snippets sequentially below for instant"
       " AI classification.</p>",
       unsafe_allow_html=True,
   )
@@ -387,12 +387,16 @@ if app_mode == "🤖 MoRTH AI":
     st.markdown("### ✍️ Sequential Content Input")
     st.markdown(
         "<small style='color: #64748b;'>Add each content snippet one by one."
-        " Type or paste your snippet and click 'Add Content Item'.</small>",
+        " Type or paste your snippet and click 'Add Content Item'. Your queue"
+        " is securely stored in session state.</small>",
         unsafe_allow_html=True,
     )
 
+    # Initialize session state tracking lists if they don't exist
     if "sequential_snippets" not in st.session_state:
       st.session_state.sequential_snippets = []
+    if "cached_output_df" not in st.session_state:
+      st.session_state.cached_output_df = None
 
     with st.form("sequential_form", clear_on_submit=True):
       current_input = st.text_area(
@@ -407,6 +411,8 @@ if app_mode == "🤖 MoRTH AI":
       if add_item_btn:
         if current_input.strip():
           st.session_state.sequential_snippets.append(current_input.strip())
+          # Clear out old analysis result if a new item is added
+          st.session_state.cached_output_df = None
           st.success(
               f"Added item #{len(st.session_state.sequential_snippets)} successfully!"
           )
@@ -424,6 +430,7 @@ if app_mode == "🤖 MoRTH AI":
       with col_reset:
         if st.button("🗑️ Clear All Items"):
           st.session_state.sequential_snippets = []
+          st.session_state.cached_output_df = None
           st.rerun()
 
       df_input = pd.DataFrame(
@@ -477,18 +484,24 @@ if app_mode == "🤖 MoRTH AI":
         with st.spinner(
             "Processing batch chunks through Gemini 3.5 Flash..."
         ):
-          output_df = classify_in_batches(df_input, taxonomy_df, batch_size)
+          st.session_state.cached_output_df = classify_in_batches(
+              df_input, taxonomy_df, batch_size
+          )
 
-        st.success("✨ Classification complete!")
-        st.dataframe(output_df)
+    # Display analysis results if available in session state
+    if st.session_state.get("cached_output_df") is not None:
+      st.success("✨ Classification complete!")
+      st.dataframe(st.session_state.cached_output_df)
 
-        csv_data = output_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Download Categorized Results as CSV",
-            data=csv_data,
-            file_name="categorized_articles_output.csv",
-            mime="text/csv",
-        )
+      csv_data = (
+          st.session_state.cached_output_df.to_csv(index=False).encode("utf-8")
+      )
+      st.download_button(
+          label="📥 Download Categorized Results as CSV",
+          data=csv_data,
+          file_name="categorized_articles_output.csv",
+          mime="text/csv",
+      )
 
 else:
   st.markdown("<h1>🌍 Master Taxonomy Manager</h1>", unsafe_allow_html=True)
@@ -591,11 +604,11 @@ else:
         elif date_filter_option == "One Month Old (Last 30 Days)":
           if now_utc - created_dt <= timedelta(days=30):
             filtered_by_date.append(item)
-        elif date_filter_option == "Custom Range" and custom_date_range:
-          if len(custom_date_range) == 2:
-            start_d, end_d = custom_date_range
-            if start_d <= item_date <= end_d:
-              filtered_by_date.append(item)
+          elif date_filter_option == "Custom Range" and custom_date_range:
+            if len(custom_date_range) == 2:
+              start_d, end_d = custom_date_range
+              if start_d <= item_date <= end_d:
+                filtered_by_date.append(item)
       except Exception:
         pass
     filtered_data = filtered_by_date

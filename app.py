@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. CUSTOM CSS STYLING
+# 2. CUSTOM CSS STYLING & DATAFRAME FILTER THEME
 # ==========================================
 st.markdown(
     """
@@ -150,24 +150,17 @@ topics = sorted(
 def extract_main_topic(topic_str):
   """Strips leading NH numbers, Expressway names, or route designations from topics.
 
-  Example: 'NH-24 Road damage' -> 'Road damage' 'Delhi-Mumbai EW Potholes' ->
-  'Potholes'
+  Example: 'NH-24 Road damage' -> 'Road damage'
   """
   if not topic_str or pd.isna(topic_str):
     return ""
   text = str(topic_str).strip()
-
-  # Common patterns: NH-xx, NHxx, Expressway names followed by delimiter/space
-  # We look for patterns like 'NH-<num>', 'NH <num>', or hyphen separated prefixes.
-  # Let's use a robust regex: remove leading NH-[0-9A-Za-z]+ or standard Expressway route markers
   cleaned = re.sub(
       r"^(?:NH-?[0-9A-Za-z]+|[A-Za-z]+(?:-[A-Za-z]+)*\s+(?:EW|Expressway|NH|HWY))\s*[-:]?\s*",
       "",
       text,
       flags=re.IGNORECASE,
   )
-
-  # Fallback: if there's a clear hyphen separating prefix route name and actual topic (e.g., 'Delhi-Mumbai - Potholes')
   if cleaned == text and "-" in text:
     parts = text.split("-", 1)
     if len(parts) > 1 and any(
@@ -175,7 +168,6 @@ def extract_main_topic(topic_str):
         for kw in ["nh", "expressway", "ew", "hwy", "delhi", "mumbai", "corridor"]
     ):
       cleaned = parts[1].strip()
-
   return cleaned.strip() if cleaned else text
 
 
@@ -193,7 +185,7 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
     
     Special Instructions:
     1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
-    2. Identify the main location the article is primarily about (if there are multiple locations, choose only the core focus location) along with its exact state.
+    2. Identify the main location the article is primarily about (если multiple locations, choose core focus) along with its exact state.
 
     ### Master Taxonomy Reference:
     {taxonomy_reference}
@@ -385,55 +377,42 @@ def edit_taxonomy_modal(
 
 
 # ==========================================
-# 8. EXCEL-LIKE COLUMN FILTERING UTILITY
+# 8. EXCEL-LIKE COLUMN FILTERING UTILITY (Matching user image layout)
 # ==========================================
 def render_excel_style_qc_section(df, display_columns, section_key_prefix):
-  """Renders an interactive data table where column filters are seamlessly integrated
+  """Renders clean Excel-like multi-select filter dropdown boxes directly above each column,
 
-  alongside each header (using expanders/popovers or popup filter boxes per column header),
-  along with copy unique ID and dataset download utilities.
+  matching the provided interface layout exactly ("All Selected" dropdown boxes per column).
   """
   working_df = df.copy()
   available_cols = [c for c in display_columns if c in working_df.columns]
   working_df = working_df[available_cols]
 
-  # Excel-style Filter Controls right above the dataframe
-  st.markdown("### 🎛️ Column Filters (Excel-Style)")
-  filter_expander = st.expander(
-      "🔍 Click to configure column filters & search", expanded=False
-  )
-
   filtered_df = working_df.copy()
 
-  with filter_expander:
-    f_cols = st.columns(min(len(available_cols), 3))
-    for idx, col_name in enumerate(available_cols):
-      target_box = f_cols[idx % len(f_cols)]
-      with target_box:
-        unique_vals = sorted(
-            [str(v) for v in working_df[col_name].dropna().unique()]
-        )
-        selected_vals = st.multiselect(
-            f"Filter [{col_name}] 🛈",
-            options=unique_vals,
-            key=f"{section_key_prefix}_col_filter_{col_name}",
-        )
-        search_query = st.text_input(
-            f"Search [{col_name}]",
-            key=f"{section_key_prefix}_col_search_{col_name}",
-            placeholder=f"Type to match {col_name}...",
-        )
+  # Render Excel-style column filter controls side-by-side matching headers
+  st.markdown("### 🎛️ Column Filters")
+  filter_cols = st.columns(len(available_cols))
 
-        if selected_vals:
-          filtered_df = filtered_df[
-              filtered_df[col_name].astype(str).isin(selected_vals)
-          ]
-        if search_query:
-          filtered_df = filtered_df[
-              filtered_df[col_name]
-              .astype(str)
-              .str.contains(search_query, case=False, na=False)
-          ]
+  for idx, col_name in enumerate(available_cols):
+    with filter_cols[idx]:
+      unique_vals = sorted(
+          [str(v) for v in working_df[col_name].dropna().unique()]
+      )
+      
+      # Use multi-select mimicking Excel filter dropdown field
+      selected_vals = st.multiselect(
+          label=col_name,
+          options=unique_vals,
+          default=[],
+          placeholder="All Selected",
+          key=f"{section_key_prefix}_excel_col_{col_name}",
+      )
+
+      if selected_vals:
+        filtered_df = filtered_df[
+            filtered_df[col_name].astype(str).isin(selected_vals)
+        ]
 
   st.divider()
   st.subheader(f"📊 Filtered Results ({len(filtered_df)} rows)")
@@ -467,7 +446,6 @@ def render_excel_style_qc_section(df, display_columns, section_key_prefix):
           key=f"{section_key_prefix}_download_btn",
       )
 
-  # Display data frame with clean column layout
   st.dataframe(filtered_df, use_container_width=True)
   return filtered_df
 
@@ -661,7 +639,7 @@ elif app_mode == "🔍 MoRTH QC":
       cols = ["Medium", "Article ID", "Analysis By Bureau", "Journalist"]
       render_excel_style_qc_section(qc_df, cols, "journalist_qc")
 
-    # 2. Topic Category and Sub Category QC (with Database Null/None normalization & Tonality rules)
+    # 2. Topic Category and Sub Category QC
     with qc_tabs[1]:
       st.markdown("### 🗂️ Topic, Category & Sub-Category QC")
       st.markdown(
@@ -671,13 +649,11 @@ elif app_mode == "🔍 MoRTH QC":
           unsafe_allow_html=True,
       )
 
-      # Build lookup mapping database rules: (cleaned_topic, category, subcategory) -> allowed_tonality_rule
       db_rules_map = {}
       for entry in data:
         db_top = extract_main_topic(entry.get("topic", ""))
         db_cat = str(entry.get("category", "")).strip().lower()
         db_sub = entry.get("subcategory")
-        # Normalize database null/None values
         if db_sub is None or pd.isna(db_sub) or str(db_sub).strip().lower() in ["none", "nan", ""]:
           db_sub_norm = ""
         else:
@@ -701,13 +677,10 @@ elif app_mode == "🔍 MoRTH QC":
 
         r_ton = str(row.get("Tonality", "")).strip()
 
-        # Check matching rule criteria against lookup map
         match_key = (clean_top, r_cat, r_sub)
         
         if match_key in db_rules_map:
           db_rule = db_rules_map[match_key]
-          
-          # Validate Tonality rule constraint
           tonality_valid = True
           if db_rule == "Only Positive":
             if r_ton.lower() != "positive":
@@ -721,15 +694,12 @@ elif app_mode == "🔍 MoRTH QC":
           elif db_rule == "Neutral & Negative":
             if r_ton.lower() not in ["neutral", "negative"]:
               tonality_valid = False
-          # If 'All Tonalities', any valid entry passes
 
           if tonality_valid:
             rule_msg = "Correct Match"
           else:
             rule_msg = f"Tonality Rule Mismatch (Expected DB Rule: {db_rule})"
         else:
-          # Check partial mismatches for informative diagnostics
-          # Check if topic matches anywhere
           matching_topics = [k[0] for k in db_rules_map.keys()]
           matching_cats = [k[1] for k in db_rules_map.keys()]
           
@@ -854,23 +824,26 @@ elif app_mode == "🔍 MoRTH QC":
       else:
         st.success("✨ No tonality conflicts or missing values found!")
 
-    # 6. Blank Tonality QC (Updated to include Bureau column and exact matching criteria)
+    # 6. Blank Tonality QC (Strictly Bureau is empty/blank and Topic is present)
     with qc_tabs[5]:
       st.markdown("### ⚠️ Blank Tonality / Bureau QC")
+      st.markdown(
+          "<small style='color: #64748b;'>Showing rows strictly where Bureau column is empty/blank and Topic is present.</small>",
+          unsafe_allow_html=True,
+      )
+      
       blank_df = qc_df.copy()
       filtered_blank = []
 
       for idx, row in blank_df.iterrows():
-        topic_val = str(row.get("Topic", "")).strip()
-        bureau_val = str(row.get("Analysis By Bureau", "")).strip()
+        topic_val = row.get("Topic", "")
+        bureau_val = row.get("Analysis By Bureau", "")
 
-        has_topic = topic_val and topic_val.lower() not in ["nan", "none", ""]
-        is_bureau_missing = (
-            not bureau_val or bureau_val.lower() in ["nan", "none", ""]
-        )
+        has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", ""]
+        is_bureau_blank = bureau_val is None or pd.isna(bureau_val) or str(bureau_val).strip() == "" or str(bureau_val).strip().lower() in ["nan", "none", "-"]
 
-        # Show rows where Bureau is missing but Topic is present
-        if has_topic and is_bureau_missing:
+        # Strict rule enforcement: Bureau must be blank & Topic must be present
+        if has_topic and is_bureau_blank:
           filtered_blank.append(row)
 
       if filtered_blank:
@@ -885,8 +858,7 @@ elif app_mode == "🔍 MoRTH QC":
         render_excel_style_qc_section(blank_res_df, cols_blank, "blank_qc")
       else:
         st.success(
-            "✨ No instances found where Topic is present but Analysis By Bureau"
-            " is missing!"
+            "✨ No instances found where Bureau is empty/blank and Topic is present!"
         )
 
   else:

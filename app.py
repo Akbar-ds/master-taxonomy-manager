@@ -495,14 +495,13 @@ if app_mode == "🤖 MoRTH AI":
       st.session_state.sequential_snippets = []
     if "cached_output_df" not in st.session_state:
       st.session_state.cached_output_df = None
-    if "current_snippet_input" not in st.session_state:
-      st.session_state.current_snippet_input = ""
 
-    st.text_area(
+    # Handle text input widget without modifying state directly via assignment
+    snippet_text_input = st.text_area(
         "Enter content snippet",
-        key="current_snippet_input",
         placeholder="Paste your content snippet here...",
         height=100,
+        key="current_snippet_input_widget"
     )
 
     col_btn1, _ = st.columns([1, 4])
@@ -510,11 +509,10 @@ if app_mode == "🤖 MoRTH AI":
       add_item_btn = st.button("➕ Add Content Item", use_container_width=True)
 
     if add_item_btn:
-      snippet_text = st.session_state.current_snippet_input.strip()
+      snippet_text = snippet_text_input.strip()
       if snippet_text:
         st.session_state.sequential_snippets.append(snippet_text)
         st.session_state.cached_output_df = None
-        st.session_state.current_snippet_input = ""
         st.rerun()
       else:
         st.warning("Please enter some content before adding.")
@@ -636,7 +634,7 @@ elif app_mode == "🔍 MoRTH QC":
     # 1. Journalist QC
     with qc_tabs[0]:
       st.markdown("### 👤 Journalist Quality Control")
-      cols = ["Medium", "Article ID", "Analysis By", "Bureau", "Journalist"]
+      cols = ["Medium", "Article ID", "Analysis By", "Analysis By Bureau", "Journalist"]
       render_excel_style_qc_section(qc_df, cols, "journalist_qc")
 
     # 2. Topic Category and Sub Category QC
@@ -723,6 +721,7 @@ elif app_mode == "🔍 MoRTH QC":
           "Category",
           "Sub Category1",
           "Tonality",
+          "Analysis By Bureau",
           "Rule Logic",
       ]
       render_excel_style_qc_section(val_df, cols_t, "topic_cat_qc")
@@ -734,6 +733,7 @@ elif app_mode == "🔍 MoRTH QC":
           "Article ID",
           "Medium",
           "Analysis By",
+          "Analysis By Bureau",
           "Photo Mention",
           "Topic",
       ]
@@ -763,6 +763,7 @@ elif app_mode == "🔍 MoRTH QC":
           "Article ID",
           "Medium",
           "Analysis By",
+          "Analysis By Bureau",
           "Spokes",
           "Quotes",
           "Flag",
@@ -813,6 +814,7 @@ elif app_mode == "🔍 MoRTH QC":
             "Article ID",
             "Medium",
             "Analysis By",
+            "Analysis By Bureau",
             "Entity",
             "Category",
             "Sub Category1",
@@ -837,9 +839,9 @@ elif app_mode == "🔍 MoRTH QC":
 
       for idx, row in blank_df.iterrows():
         topic_val = row.get("Topic", "")
-        bureau_val = row.get("Bureau", "")
+        bureau_val = row.get("Analysis By Bureau", "")
 
-        has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", "NA"]
+        has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", ""]
         
         # Strict blank check implementation as requested
         is_bureau_blank = (
@@ -854,11 +856,12 @@ elif app_mode == "🔍 MoRTH QC":
 
       if filtered_blank:
         blank_res_df = pd.DataFrame(filtered_blank)
+        # Added the Bureau column ("Analysis By Bureau") along with all the other columns as requested
         cols_blank = [
             "Article ID",
             "Medium",
             "Analysis By",
-            "Bureau",
+            "Analysis By Bureau",
             "Overall Tonality",
             "Topic",
         ]

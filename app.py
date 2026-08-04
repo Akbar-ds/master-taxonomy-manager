@@ -723,7 +723,6 @@ elif app_mode == "🔍 MoRTH QC":
           "Category",
           "Sub Category1",
           "Tonality",
-          "Bureau",
           "Rule Logic",
       ]
       render_excel_style_qc_section(val_df, cols_t, "topic_cat_qc")
@@ -735,7 +734,6 @@ elif app_mode == "🔍 MoRTH QC":
           "Article ID",
           "Medium",
           "Analysis By",
-          "Bureau",
           "Photo Mention",
           "Topic",
       ]
@@ -765,7 +763,6 @@ elif app_mode == "🔍 MoRTH QC":
           "Article ID",
           "Medium",
           "Analysis By",
-          "Bureau",
           "Spokes",
           "Quotes",
           "Flag",
@@ -816,7 +813,6 @@ elif app_mode == "🔍 MoRTH QC":
             "Article ID",
             "Medium",
             "Analysis By",
-            "Bureau",
             "Entity",
             "Category",
             "Sub Category1",
@@ -843,7 +839,7 @@ elif app_mode == "🔍 MoRTH QC":
         topic_val = row.get("Topic", "")
         bureau_val = row.get("Bureau", "")
 
-        has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", ""]
+        has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", "NA"]
         
         # Strict blank check implementation as requested
         is_bureau_blank = (

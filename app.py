@@ -185,7 +185,7 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
     
     Special Instructions:
     1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
-    2. Identify the main location the article is primarily about (если multiple locations, choose core focus) along with its exact state.
+    2. Identify the main location the article is primarily about along with its exact state.
 
     ### Master Taxonomy Reference:
     {taxonomy_reference}
@@ -636,7 +636,7 @@ elif app_mode == "🔍 MoRTH QC":
     # 1. Journalist QC
     with qc_tabs[0]:
       st.markdown("### 👤 Journalist Quality Control")
-      cols = ["Medium", "Article ID", "Analysis By Bureau", "Journalist"]
+      cols = ["Medium", "Article ID", "Analysis By", "Analysis By Bureau", "Journalist"]
       render_excel_style_qc_section(qc_df, cols, "journalist_qc")
 
     # 2. Topic Category and Sub Category QC
@@ -718,6 +718,7 @@ elif app_mode == "🔍 MoRTH QC":
       cols_t = [
           "Medium",
           "Article ID",
+          "Analysis By",
           "Topic",
           "Category",
           "Sub Category1",
@@ -733,6 +734,7 @@ elif app_mode == "🔍 MoRTH QC":
       cols_photo = [
           "Article ID",
           "Medium",
+          "Analysis By",
           "Analysis By Bureau",
           "Photo Mention",
           "Topic",
@@ -762,6 +764,7 @@ elif app_mode == "🔍 MoRTH QC":
       cols_spokes = [
           "Article ID",
           "Medium",
+          "Analysis By",
           "Analysis By Bureau",
           "Spokes",
           "Quotes",
@@ -812,6 +815,7 @@ elif app_mode == "🔍 MoRTH QC":
         cols_conf = [
             "Article ID",
             "Medium",
+            "Analysis By",
             "Analysis By Bureau",
             "Entity",
             "Category",
@@ -851,8 +855,10 @@ elif app_mode == "🔍 MoRTH QC":
         cols_blank = [
             "Article ID",
             "Medium",
+            "Analysis By",
             "Overall Tonality",
             "Analysis By Bureau",
+            "Bureau",
             "Topic",
         ]
         render_excel_style_qc_section(blank_res_df, cols_blank, "blank_qc")

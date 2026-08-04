@@ -148,7 +148,6 @@ topics = sorted(
 # ==========================================
 @st.cache_data
 def classify_batch_articles(articles_json_str, taxonomy_reference):
-  """Calls Gemini API for a batch of articles and caches the result."""
   client = get_gemini_client()
   articles_payload = json.loads(articles_json_str)
 
@@ -206,7 +205,7 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
 st.sidebar.title("🧭 Explore")
 app_mode = st.sidebar.selectbox(
     "Choose Application Mode",
-    ["📋 Master Taxonomy Manager", "🤖 MoRTH AI"],
+    ["📋 Master Taxonomy Manager", "🤖 MoRTH AI", "🔍 MoRTH QC"],
 )
 
 
@@ -350,7 +349,87 @@ def edit_taxonomy_modal(
 
 
 # ==========================================
-# 7. MAIN APP INTERFACE ROUTING
+# 7. HELPER FOR DYNAMIC FILTERS & UI EXPORTS
+# ==========================================
+def render_qc_filtered_section(df, display_columns, section_key_prefix):
+  """Renders standard filter sidebar controls, data frame, and copy/download handlers for QC modules."""
+  working_df = df.copy()
+
+  # Ensure columns exist
+  available_cols = [c for c in display_columns if c in working_df.columns]
+  working_df = working_df[available_cols]
+
+  st.markdown("### 🎛️ Filter Options")
+  filtered_df = working_df.copy()
+
+  filter_cols = st.columns(min(len(available_cols), 3))
+  for i, col_name in enumerate(available_cols):
+    target_col = filter_cols[i % len(filter_cols)]
+    with target_col:
+      unique_vals = sorted(
+          [str(v) for v in working_df[col_name].dropna().unique()]
+      )
+      selected_vals = st.multiselect(
+          f"Filter {col_name}",
+          options=unique_vals,
+          key=f"{section_key_prefix}_filter_{col_name}",
+      )
+      search_term = st.text_input(
+          f"Search {col_name}",
+          key=f"{section_key_prefix}_search_{col_name}",
+          placeholder=f"Type to search {col_name}...",
+      )
+
+      if selected_vals:
+        filtered_df = filtered_df[
+            filtered_df[col_name].astype(str).isin(selected_vals)
+        ]
+      if search_term:
+        filtered_df = filtered_df[
+            filtered_df[col_name]
+            .astype(str)
+            .str.contains(search_term, case=False, na=False)
+        ]
+
+  st.divider()
+  st.subheader(f"📊 Results ({len(filtered_df)} rows)")
+
+  # Action Buttons Row
+  btn_col1, btn_col2, _ = st.columns([1, 1, 3])
+
+  with btn_col1:
+    # Extract Article ID field if available for unique copy
+    id_col_candidates = ["Article ID", "ArticleID", "article_id", "ID"]
+    match_id_col = next(
+        (c for c in id_col_candidates if c in filtered_df.columns), None
+    )
+
+    if match_id_col:
+      unique_ids = (
+          filtered_df[match_id_col].dropna().astype(str).unique().tolist()
+      )
+      ids_string = ", ".join(unique_ids)
+      if st.button("📋 Copy Unique ID's", key=f"{section_key_prefix}_copy_btn"):
+        st.code(ids_string, language="text")
+        st.success(f"Copied {len(unique_ids)} unique IDs to output block!")
+
+  with btn_col2:
+    if not filtered_df.empty:
+      csv_bytes = filtered_df.to_csv(index=False).encode("utf-8")
+      st.download_button(
+          label="📥 Download Dataset",
+          data=csv_bytes,
+          file_name=f"{section_key_prefix}_report.csv",
+          mime="text/csv",
+          key=f"{section_key_prefix}_download_btn",
+      )
+
+  st.dataframe(filtered_df, use_container_width=True)
+  return filtered_df
+
+
+# ==========================================
+# 8. MAIN APP INTERFACE ROUTING
 # ==========================================
 if app_mode == "🤖 MoRTH AI":
   st.subheader("🤖 HELLO I AM MoRTH AI")
@@ -362,7 +441,6 @@ if app_mode == "🤖 MoRTH AI":
   )
   st.divider()
 
-  # Choose Input Method
   input_method = st.radio(
       "Select Input Source",
       ["📁 Upload Spreadsheet (CSV/Excel)", "✍️ Add Contents Sequentially"],
@@ -386,38 +464,38 @@ if app_mode == "🤖 MoRTH AI":
   else:
     st.markdown("### ✍️ Sequential Content Input")
     st.markdown(
-        "<small style='color: #64748b;'>Add each content snippet one by one."
-        " Type or paste your snippet and click 'Add Content Item'. Your queue"
-        " is securely stored in session state.</small>",
+        "<small style='color: #64748b;'>Paste your content snippet below and"
+        " click the button to add it to your queue.</small>",
         unsafe_allow_html=True,
     )
 
-    # Initialize session state tracking lists if they don't exist
     if "sequential_snippets" not in st.session_state:
       st.session_state.sequential_snippets = []
     if "cached_output_df" not in st.session_state:
       st.session_state.cached_output_df = None
+    if "current_snippet_input" not in st.session_state:
+      st.session_state.current_snippet_input = ""
 
-    with st.form("sequential_form", clear_on_submit=True):
-      current_input = st.text_area(
-          "Enter content snippet",
-          placeholder=(
-              "Paste your content snippet here, then click Add Content Item..."
-          ),
-          height=100,
-      )
-      add_item_btn = st.form_submit_button("➕ Add Content Item")
+    st.text_area(
+        "Enter content snippet",
+        key="current_snippet_input",
+        placeholder="Paste your content snippet here...",
+        height=100,
+    )
 
-      if add_item_btn:
-        if current_input.strip():
-          st.session_state.sequential_snippets.append(current_input.strip())
-          # Clear out old analysis result if a new item is added
-          st.session_state.cached_output_df = None
-          st.success(
-              f"Added item #{len(st.session_state.sequential_snippets)} successfully!"
-          )
-        else:
-          st.warning("Please enter some content before adding.")
+    col_btn1, _ = st.columns([1, 4])
+    with col_btn1:
+      add_item_btn = st.button("➕ Add Content Item", use_container_width=True)
+
+    if add_item_btn:
+      snippet_text = st.session_state.current_snippet_input.strip()
+      if snippet_text:
+        st.session_state.sequential_snippets.append(snippet_text)
+        st.session_state.cached_output_df = None
+        st.session_state.current_snippet_input = ""
+        st.rerun()
+      else:
+        st.warning("Please enter some content before adding.")
 
     if st.session_state.sequential_snippets:
       st.markdown("#### 📋 Added Contents Queue:")
@@ -488,7 +566,6 @@ if app_mode == "🤖 MoRTH AI":
               df_input, taxonomy_df, batch_size
           )
 
-    # Display analysis results if available in session state
     if st.session_state.get("cached_output_df") is not None:
       st.success("✨ Classification complete!")
       st.dataframe(st.session_state.cached_output_df)
@@ -502,6 +579,231 @@ if app_mode == "🤖 MoRTH AI":
           file_name="categorized_articles_output.csv",
           mime="text/csv",
       )
+
+elif app_mode == "🔍 MoRTH QC":
+  st.subheader("🔍 MoRTH Quality Control (QC Dashboard)")
+  st.markdown(
+      "<p style='font-size: 15px; color: #475569;'>Upload your analysis Excel"
+      " report below to run automated validations across specific QC"
+      " sub-modules.</p>",
+      unsafe_allow_html=True,
+  )
+  st.divider()
+
+  qc_file = st.file_uploader(
+      "Upload Master Analysis Report (Excel/CSV)", type=["xlsx", "csv"]
+  )
+
+  if qc_file:
+    qc_df = (
+        pd.read_csv(qc_file)
+        if qc_file.name.endswith(".csv")
+        else pd.read_excel(qc_file)
+    )
+
+    # Sub-tabs for MoRTH QC
+    qc_tabs = st.tabs([
+        "👤 Journalist QC",
+        "🗂️ Topic & Taxonomy QC",
+        "📸 Photo QC",
+        "🗣️ Spokes QC",
+        "⚖️ Conflicts",
+        "⚠️ Blank Tonality QC",
+    ])
+
+    # 1. Journalist QC
+    with qc_tabs[0]:
+      st.markdown("### 👤 Journalist Quality Control")
+      cols = ["Medium", "Article ID", "Analysis By Bureau", "Journalist"]
+      render_qc_filtered_section(qc_df, cols, "journalist_qc")
+
+    # 2. Topic Category and Sub Category QC
+    with qc_tabs[1]:
+      st.markdown("### 🗂️ Topic, Category & Sub-Category QC")
+      st.markdown(
+          "<small style='color: #64748b;'>Validating uploaded row attributes"
+          " against Supabase Master Taxonomy rules.</small>",
+          unsafe_allow_html=True,
+      )
+
+      validation_rows = []
+      # Convert database list to quick lookup dictionary sets if possible
+      db_taxonomy_tuples = set()
+      for entry in data:
+        db_taxonomy_tuples.add((
+            str(entry.get("topic", "")).strip().lower(),
+            str(entry.get("category", "")).strip().lower(),
+            str(entry.get("subcategory", "") or "").strip().lower(),
+        ))
+
+      for idx, row in qc_df.iterrows():
+        r_top = str(row.get("Topic", "")).strip().lower()
+        r_cat = str(row.get("Category", "")).strip().lower()
+        r_sub = str(row.get("Sub Category1", "") or "").strip().lower()
+
+        match_found = False
+        mismatch_reasons = []
+
+        # Simple verification check against database items
+        if (r_top, r_cat, r_sub) in db_taxonomy_tuples:
+          match_found = True
+          rule_msg = "Matched Rule Perfectly"
+        else:
+          rule_msg = f"Mismatch: Topic/Cat/Sub combination not found in DB"
+
+        validation_rows.append(rule_msg)
+
+      val_df = qc_df.copy()
+      val_df["Rule Logic"] = validation_rows
+
+      cols_t = [
+          "Medium",
+          "Article ID",
+          "Topic",
+          "Category",
+          "Sub Category1",
+          "Analysis By Bureau",
+          "Rule Logic",
+      ]
+      render_qc_filtered_section(val_df, cols_t, "topic_cat_qc")
+
+    # 3. Photo QC
+    with qc_tabs[2]:
+      st.markdown("### 📸 Photo Quality Control")
+      cols_photo = [
+          "Article ID",
+          "Medium",
+          "Analysis By Bureau",
+          "Photo Mention",
+          "Topic",
+      ]
+      render_qc_filtered_section(qc_df, cols_photo, "photo_qc")
+
+    # 4. Spokes QC
+    with qc_tabs[3]:
+      st.markdown("### 🗣️ Spokes Quality Control")
+      spokes_df = qc_df.copy()
+      flags = []
+      for idx, row in spokes_df.iterrows():
+        spoke_val = str(row.get("Spokes", "")).strip()
+        quote_val = str(row.get("Quotes", "")).strip().lower()
+
+        if spoke_val and spoke_val.lower() != "nan" and spoke_val != "":
+          if quote_val in ["", "nan", "no", "blank", "none"]:
+            flags.append("Missing Quotes")
+          elif quote_val in ["yes", "true", "1"]:
+            flags.append("Review Entry")
+          else:
+            flags.append("Missing Quotes")
+        else:
+          flags.append("OK")
+
+      spokes_df["Flag"] = flags
+      cols_spokes = [
+          "Article ID",
+          "Medium",
+          "Analysis By Bureau",
+          "Spokes",
+          "Quotes",
+          "Flag",
+      ]
+      render_qc_filtered_section(spokes_df, cols_spokes, "spokes_qc")
+
+    # 5. Conflicts
+    with qc_tabs[4]:
+      st.markdown("### ⚖️ Tonality Conflicts QC")
+      conflict_df = qc_df.copy()
+      conflict_flags = []
+      filtered_conflict_rows = []
+
+      for idx, row in conflict_df.iterrows():
+        overall_ton = str(row.get("Overall Tonality", "")).strip()
+        row_ton = str(row.get("Tonality", "")).strip()
+
+        is_missing = (
+            not overall_ton
+            or overall_ton.lower() in ["nan", "none", ""]
+            or overall_ton.isspace()
+        )
+        is_mismatch = (
+            not is_missing
+            and row_ton
+            and row_ton.lower() not in ["nan", "none", ""]
+            and overall_ton.lower() != row_ton.lower()
+        )
+
+        if is_missing:
+          conflict_flags.append("Missing Tonality")
+          filtered_conflict_rows.append(row)
+        elif is_mismatch:
+          conflict_flags.append("Mismatched")
+          filtered_conflict_rows.append(row)
+
+      if filtered_conflict_rows:
+        conf_result_df = pd.DataFrame(filtered_conflict_rows)
+        # Recompute flags subset
+        conf_result_df["Flag"] = [
+            (
+                "Missing Tonality"
+                if not str(o).strip() or str(o).lower() in ["nan", "none", ""]
+                else "Mismatched"
+            )
+            for o in conf_result_df["Overall Tonality"]
+        ]
+        cols_conf = [
+            "Article ID",
+            "Medium",
+            "Analysis By Bureau",
+            "Entity",
+            "Category",
+            "Sub Category1",
+            "Overall Tonality",
+            "Tonality",
+            "Flag",
+        ]
+        render_qc_filtered_section(conf_result_df, cols_conf, "conflicts_qc")
+      else:
+        st.success("✨ No tonality conflicts or missing values found!")
+
+    # 6. Blank Tonality QC
+    with qc_tabs[5]:
+      st.markdown("### ⚠️ Blank Tonality / Bureau QC")
+      blank_df = qc_df.copy()
+      filtered_blank = []
+
+      for idx, row in blank_df.iterrows():
+        topic_val = str(row.get("Topic", "")).strip()
+        bureau_val = str(row.get("Analysis By Bureau", "")).strip()
+
+        has_topic = topic_val and topic_val.lower() not in ["nan", "none", ""]
+        is_bureau_blank = (
+            not bureau_val or bureau_val.lower() in ["nan", "none", ""]
+        )
+
+        if has_topic and is_bureau_blank:
+          filtered_blank.append(row)
+
+      if filtered_blank:
+        blank_res_df = pd.DataFrame(filtered_blank)
+        cols_blank = [
+            "Article ID",
+            "Medium",
+            "Overall Tonality",
+            "Analysis By Bureau",
+            "Topic",
+        ]
+        render_qc_filtered_section(blank_res_df, cols_blank, "blank_qc")
+      else:
+        st.success(
+            "✨ No instances found where Topic is filled but Analysis By Bureau"
+            " is blank!"
+        )
+
+  else:
+    st.info(
+        "ℹ️ Please upload an analysis spreadsheet above to activate the QC"
+        " modules."
+    )
 
 else:
   st.markdown("<h1>🌍 Master Taxonomy Manager</h1>", unsafe_allow_html=True)

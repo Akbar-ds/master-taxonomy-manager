@@ -828,7 +828,7 @@ elif app_mode == "🔍 MoRTH QC":
       else:
         st.success("✨ No tonality conflicts or missing values found!")
 
-    # 6. Blank Tonality QC (Strictly Bureau is empty/blank and Topic is present - filtering out non-matching rows entirely)
+    # 6. Blank Tonality QC (Strictly Bureau is completely empty and Topic is present)
     with qc_tabs[5]:
       st.markdown("### ⚠️ Blank Tonality / Bureau QC")
       st.markdown(
@@ -845,8 +845,12 @@ elif app_mode == "🔍 MoRTH QC":
 
         has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", ""]
         
-        # Strict blank check: Only consider truly blank cells (ignoring text entries like 'None', 'NA', or 'nan')
-        is_bureau_blank = bureau_val is None or pd.isna(bureau_val) or str(bureau_val).strip() == ""
+        # Strict blank check implementation as requested
+        is_bureau_blank = (
+            bureau_val is None 
+            or pd.isna(bureau_val) 
+            or str(bureau_val).strip() == ""
+        )
 
         # Strict rule enforcement: Only keep rows where this rule is true
         if has_topic and is_bureau_blank:
@@ -858,9 +862,8 @@ elif app_mode == "🔍 MoRTH QC":
             "Article ID",
             "Medium",
             "Analysis By",
-            "Overall Tonality",
             "Analysis By Bureau",
-            "Bureau"
+            "Overall Tonality",
             "Topic",
         ]
         render_excel_style_qc_section(blank_res_df, cols_blank, "blank_qc")

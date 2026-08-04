@@ -860,6 +860,7 @@ elif app_mode == "🔍 MoRTH QC":
             "Analysis By",
             "Overall Tonality",
             "Analysis By Bureau",
+            "Bureau"
             "Topic",
         ]
         render_excel_style_qc_section(blank_res_df, cols_blank, "blank_qc")

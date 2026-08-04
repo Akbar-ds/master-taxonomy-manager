@@ -828,11 +828,11 @@ elif app_mode == "🔍 MoRTH QC":
       else:
         st.success("✨ No tonality conflicts or missing values found!")
 
-    # 6. Blank Tonality QC (Strictly Bureau is empty/blank and Topic is present)
+    # 6. Blank Tonality QC (Strictly Bureau is empty/blank and Topic is present - filtering out non-matching rows entirely)
     with qc_tabs[5]:
       st.markdown("### ⚠️ Blank Tonality / Bureau QC")
       st.markdown(
-          "<small style='color: #64748b;'>Showing rows strictly where Bureau column is empty/blank and Topic is present.</small>",
+          "<small style='color: #64748b;'>Showing strictly rows matching the rule: Bureau is strictly blank/empty and Topic is present.</small>",
           unsafe_allow_html=True,
       )
       
@@ -844,9 +844,11 @@ elif app_mode == "🔍 MoRTH QC":
         bureau_val = row.get("Analysis By Bureau", "")
 
         has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", ""]
-        is_bureau_blank = bureau_val is None or pd.isna(bureau_val) or str(bureau_val).strip() == "" or str(bureau_val).strip().lower() in ["nan", "none", "-"]
+        
+        # Strict blank check: Only consider truly blank cells (ignoring text entries like 'None', 'NA', or 'nan')
+        is_bureau_blank = bureau_val is None or pd.isna(bureau_val) or str(bureau_val).strip() == ""
 
-        # Strict rule enforcement: Bureau must be blank & Topic must be present
+        # Strict rule enforcement: Only keep rows where this rule is true
         if has_topic and is_bureau_blank:
           filtered_blank.append(row)
 
@@ -858,13 +860,12 @@ elif app_mode == "🔍 MoRTH QC":
             "Analysis By",
             "Overall Tonality",
             "Analysis By Bureau",
-            "Bureau",
             "Topic",
         ]
         render_excel_style_qc_section(blank_res_df, cols_blank, "blank_qc")
       else:
         st.success(
-            "✨ No instances found where Bureau is empty/blank and Topic is present!"
+            "✨ No rows match the Blank Tonality / Bureau rule (Bureau strictly blank & Topic present)."
         )
 
   else:

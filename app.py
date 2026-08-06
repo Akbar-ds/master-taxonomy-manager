@@ -222,6 +222,26 @@ Classification Guidelines:
 
 6. This client-centric tonality should be used consistently while selecting the taxonomy Topic, Category, and Overall Tonality.
 
+4. ### Topic Selection Rule
+
+The primary objective is to identify the Topic(s) that best summarize the key themes and intent of the article.
+
+- By default, assign **only one Topic**, selecting the single most relevant topic from the Master Taxonomy.
+- However, if the article genuinely covers multiple significant themes that cannot be accurately represented by a single topic, you may assign **up to three Topics**.
+
+### Guidelines
+
+1. Use **one Topic** whenever it sufficiently captures the essence of the article.
+2. Use **two or three Topics only when necessary**, such as when:
+   - The article discusses multiple independent events or issues of equal importance.
+   - Two or more major topics are deeply interconnected and together provide a more accurate summary of the content.
+   - A single topic would omit a critical aspect of the article.
+3. Do **not** assign multiple topics simply because the article contains minor references to other subjects.
+4. Prioritize the topics based on their relevance and importance to the overall article.
+5. Every selected Topic **must exist exactly as defined in the Master Taxonomy**. Do not create, modify, or infer new topics.
+6. If multiple Topics are selected, list them in order of importance, separated by commas.
+7. The use of multiple Topics should be **exceptional rather than routine**. The default expectation is a single Topic unless there is a clear and justified need for more than one.
+
     ### Master Taxonomy Reference:
     {taxonomy_reference}
 

@@ -186,6 +186,41 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
     Special Instructions:
     1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
     2. Identify the main location the article is primarily about along with its exact state.
+    3.Tonality Determination Rule (Client-Centric)
+
+When determining the tonality of an article, ALWAYS evaluate the sentiment from the perspective of the client (MoRTH) and its associated entities, rather than from the perspective of the author, public, or any other stakeholder.
+
+The client ecosystem includes, but is not limited to:
+- Ministry of Road Transport and Highways (MoRTH)
+- National Highways Authority of India (NHAI)
+- NHIDCL
+- Border Roads Organisation (BRO)
+- Union Minister Nitin Gadkari
+- Any official spokesperson, department, authority, project, scheme, initiative, policy, or infrastructure asset directly associated with these entities.
+
+Determine whether the article portrays the client or its entities in a Positive, Negative, or Neutral manner.
+
+Classification Guidelines:
+
+- **Positive:** The article highlights achievements, successful projects, policy improvements, infrastructure development, awards, positive public impact, appreciation, transparency, innovation, efficiency, or any information that enhances the reputation or public perception of MoRTH or its entities.
+
+- **Negative:** The article reports criticism, allegations, corruption, delays, accidents attributed to negligence, project failures, protests, legal disputes, financial irregularities, poor execution, environmental concerns, public dissatisfaction, safety failures, controversies, or any information that harms or negatively impacts the reputation of MoRTH or its associated entities.
+
+- **Neutral:** The article presents factual information without expressing a positive or negative implication towards the client. Examples include announcements, tenders, routine inspections, traffic advisories, policy notifications, appointments, factual updates, statistical reports, or balanced reporting without judgment.
+
+### Important Rules
+
+1. The tonality MUST always be determined with respect to **MoRTH and its associated entities**, not with respect to any other individual or organization mentioned in the article.
+
+2. Ignore the sentiment expressed towards unrelated individuals, companies, political parties, or organizations unless that sentiment directly affects the reputation or perception of MoRTH or its entities.
+
+3. If multiple entities are discussed, prioritize the sentiment directed toward MoRTH or its associated entities.
+
+4. If the article contains both positive and negative aspects about the client, determine the dominant overall sentiment. If neither sentiment clearly dominates, classify the tonality as **Neutral**.
+
+5. Always base the tonality on the overall impact the article would have on the public perception of MoRTH or its associated entities.
+
+6. This client-centric tonality should be used consistently while selecting the taxonomy Topic, Category, and Overall Tonality.
 
     ### Master Taxonomy Reference:
     {taxonomy_reference}

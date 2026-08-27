@@ -2,8 +2,7 @@ from datetime import date, datetime, timedelta
 import json
 import re
 import time
-from google import genai
-from google.genai import types
+from groq import Groq
 import pandas as pd
 from streamlit_supabase_auth import login_form
 from supabase import Client, create_client
@@ -65,8 +64,8 @@ st.markdown(
 # 3. INITIALIZATIONS & CACHED RESOURCES
 # ==========================================
 @st.cache_resource
-def get_gemini_client():
-  return genai.Client(api_key=st.secrets["gemini"]["api_key"])
+def get_groq_client():
+    return Groq(api_key=st.secrets["groq"]["api_key"])
 
 
 @st.cache_data
@@ -174,23 +173,92 @@ def extract_main_topic(topic_str):
 # ==========================================
 # 5. AI BATCH CLASSIFICATION CACHED FUNCTION
 # ==========================================
+# ==========================================
+# 5. AI BATCH CLASSIFICATION
+# ==========================================
+
 @st.cache_data
 def classify_batch_articles(articles_json_str, taxonomy_reference):
-  client = get_gemini_client()
-  articles_payload = json.loads(articles_json_str)
 
-  prompt = f"""
-    You are an expert media analyst and taxonomy classification engine.
-    Analyze the batch of articles provided below and categorize each one strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
-    
-    Special Instructions:
-    1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce or search for the exact highway number.
-    2. Identify the main location the article is primarily about along with its exact state.
-    3.Tonality Determination Rule (Client-Centric)
+    client = get_groq_client()
+    articles_payload = json.loads(articles_json_str)
 
-When determining the tonality of an article, ALWAYS evaluate the sentiment from the perspective of the client (MoRTH) and its associated entities, rather than from the perspective of the author, public, or any other stakeholder.
+    # --------------------------------------------------
+    # COMPACT TAXONOMY
+    # --------------------------------------------------
+    # taxonomy_reference is now a compact JSON string
+    # containing only the fields actually needed by AI.
+    try:
+        taxonomy_records = json.loads(taxonomy_reference)
 
-The client ecosystem includes, but is not limited to:
+        compact_taxonomy = []
+
+        for row in taxonomy_records:
+
+            category = str(
+                row.get("Category", row.get("category", ""))
+            ).strip()
+
+            subcategory = str(
+                row.get("Subcategory", row.get("subcategory", ""))
+            ).strip()
+
+            topic = str(
+                row.get("Topic", row.get("topic", ""))
+            ).strip()
+
+            tonality = str(
+                row.get("Tonality", row.get("tonality", ""))
+            ).strip()
+
+            compact_taxonomy.append({
+                "Category": category,
+                "Subcategory": subcategory,
+                "Topic": topic,
+                "Tonality": tonality
+            })
+
+        compact_taxonomy_text = json.dumps(
+            compact_taxonomy,
+            ensure_ascii=False,
+            separators=(",", ":")
+        )
+
+    except Exception:
+        # Fallback in case taxonomy parsing fails
+        compact_taxonomy_text = str(taxonomy_reference)
+
+    # --------------------------------------------------
+    # PROMPT
+    # --------------------------------------------------
+
+    prompt = f"""
+You are an expert media analyst and taxonomy classification engine.
+
+Analyze the batch of articles provided below and categorize each article strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
+
+IMPORTANT:
+- Do not create new Categories.
+- Do not create new Subcategories.
+- Do not create new Topics.
+- Every selected Topic must exist exactly in the Master Taxonomy.
+- Follow all classification rules below.
+- Return ONLY valid JSON.
+- Do not include markdown.
+- Do not include explanations outside the JSON.
+
+SPECIAL INSTRUCTIONS:
+
+1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce the exact highway number when possible.
+
+2. Identify the main location the article is primarily about along with its exact state.
+
+3. TONALITY DETERMINATION RULE - CLIENT CENTRIC
+
+When determining tonality, ALWAYS evaluate sentiment from the perspective of the client (MoRTH) and its associated entities, rather than the author, public, or any other stakeholder.
+
+The client ecosystem includes:
+
 - Ministry of Road Transport and Highways (MoRTH)
 - National Highways Authority of India (NHAI)
 - NHIDCL
@@ -200,86 +268,185 @@ The client ecosystem includes, but is not limited to:
 
 Determine whether the article portrays the client or its entities in a Positive, Negative, or Neutral manner.
 
-Classification Guidelines:
+POSITIVE:
+The article highlights achievements, successful projects, policy improvements, infrastructure development, awards, positive public impact, appreciation, transparency, innovation, efficiency, or information that enhances the reputation or public perception of MoRTH or its entities.
 
-- **Positive:** The article highlights achievements, successful projects, policy improvements, infrastructure development, awards, positive public impact, appreciation, transparency, innovation, efficiency, or any information that enhances the reputation or public perception of MoRTH or its entities.
+NEGATIVE:
+The article reports criticism, allegations, corruption, delays, accidents attributed to negligence, project failures, protests, legal disputes, financial irregularities, poor execution, environmental concerns, public dissatisfaction, safety failures, controversies, or information that harms or negatively impacts the reputation of MoRTH or its associated entities.
 
-- **Negative:** The article reports criticism, allegations, corruption, delays, accidents attributed to negligence, project failures, protests, legal disputes, financial irregularities, poor execution, environmental concerns, public dissatisfaction, safety failures, controversies, or any information that harms or negatively impacts the reputation of MoRTH or its associated entities.
+NEUTRAL:
+The article presents factual information without expressing a positive or negative implication towards the client.
 
-- **Neutral:** The article presents factual information without expressing a positive or negative implication towards the client. Examples include announcements, tenders, routine inspections, traffic advisories, policy notifications, appointments, factual updates, statistical reports, or balanced reporting without judgment.
+Examples include:
+- announcements
+- tenders
+- routine inspections
+- traffic advisories
+- policy notifications
+- appointments
+- factual updates
+- statistical reports
+- balanced reporting without judgment
 
-### Important Rules
+IMPORTANT TONALITY RULES:
 
-1. The tonality MUST always be determined with respect to **MoRTH and its associated entities**, not with respect to any other individual or organization mentioned in the article.
+1. Tonality MUST always be determined with respect to MoRTH and its associated entities.
 
-2. Ignore the sentiment expressed towards unrelated individuals, companies, political parties, or organizations unless that sentiment directly affects the reputation or perception of MoRTH or its entities.
+2. Ignore sentiment toward unrelated individuals, companies, political parties, or organizations unless that sentiment directly affects the reputation or perception of MoRTH or its entities.
 
 3. If multiple entities are discussed, prioritize the sentiment directed toward MoRTH or its associated entities.
 
-4. If the article contains both positive and negative aspects about the client, determine the dominant overall sentiment. If neither sentiment clearly dominates, classify the tonality as **Neutral**.
+4. If an article contains both positive and negative aspects about the client, determine the dominant overall sentiment. If neither clearly dominates, classify as Neutral.
 
-5. Always base the tonality on the overall impact the article would have on the public perception of MoRTH or its associated entities.
+5. Always base tonality on the overall impact the article would have on public perception of MoRTH or its associated entities.
 
-6. This client-centric tonality should be used consistently while selecting the taxonomy Topic, Category, and Overall Tonality.
+6. Apply this client-centric tonality consistently when selecting Topic, Category, and Overall Tonality.
 
-4. ### Topic Selection Rule
+TOPIC SELECTION RULE:
 
-The primary objective is to identify the Topic(s) that best summarize the key themes and intent of the article.
+The primary objective is to identify the Topic or Topics that best summarize the key themes and intent of the article.
 
-- By default, assign **only one Topic**, selecting the single most relevant topic from the Master Taxonomy.
-- However, if the article genuinely covers multiple significant themes that cannot be accurately represented by a single topic, you may assign **up to three Topics**.
+By default, assign ONLY ONE Topic.
 
-### Guidelines
+You may assign up to THREE Topics only when genuinely necessary.
 
-1. Use **one Topic** whenever it sufficiently captures the essence of the article.
-2. Use **two or three Topics only when necessary**, such as when:
-   - The article discusses multiple independent events or issues of equal importance.
-   - Two or more major topics are deeply interconnected and together provide a more accurate summary of the content.
-   - A single topic would omit a critical aspect of the article.
-3. Do **not** assign multiple topics simply because the article contains minor references to other subjects.
-4. Prioritize the topics based on their relevance and importance to the overall article.
-5. Every selected Topic **must exist exactly as defined in the Master Taxonomy**. Do not create, modify, or infer new topics.
-6. If multiple Topics are selected, list them in order of importance, separated by commas.
-7. The use of multiple Topics should be **exceptional rather than routine**. The default expectation is a single Topic unless there is a clear and justified need for more than one.
+Use multiple Topics only when:
 
-    ### Master Taxonomy Reference:
-    {taxonomy_reference}
+- The article discusses multiple independent events or issues of equal importance.
+- Two or more major topics are deeply interconnected.
+- A single Topic would omit a critical aspect of the article.
 
-    ### Articles Batch to Classify:
-    {json.dumps(articles_payload)}
+Do NOT assign multiple Topics merely because minor references to other subjects appear in the article.
 
-    Return your response strictly as a valid JSON array of objects with keys:
-    "index", "Category", "Subcategory", "Topic", "Tonality", "Overall Tonality", "NH NO", "Location".
-    """
+Prioritize Topics according to their relevance and importance.
 
-  retries = 3
-  for attempt in range(retries):
-    try:
-      response = client.models.generate_content(
-          model="gemini-3.5-flash",
-          contents=prompt,
-          config=types.GenerateContentConfig(
-              response_mime_type="application/json", temperature=0.1
-          ),
-      )
-      return json.loads(response.text)
-    except Exception as e:
-      if attempt == retries - 1:
-        error_results = []
-        for item in articles_payload:
-          error_results.append({
-              "index": item["index"],
-              "Category": "Error",
-              "Subcategory": str(e),
-              "Topic": "N/A",
-              "Tonality": "N/A",
-              "Overall Tonality": "N/A",
-              "NH NO": "N/A",
-              "Location": "N/A",
-          })
-        return error_results
-      else:
-        time.sleep(2**attempt)
+Every selected Topic MUST exist exactly as defined in the Master Taxonomy.
+
+If multiple Topics are selected, list them in order of importance, separated by commas.
+
+Multiple Topics should be exceptional rather than routine.
+
+MASTER TAXONOMY REFERENCE:
+
+{compact_taxonomy_text}
+
+ARTICLES TO CLASSIFY:
+
+{json.dumps(articles_payload, ensure_ascii=False, separators=(",", ":"))}
+
+RETURN FORMAT:
+
+Return a JSON object in exactly this structure:
+
+{{
+    "results": [
+        {{
+            "index": 0,
+            "Category": "...",
+            "Subcategory": "...",
+            "Topic": "...",
+            "Tonality": "...",
+            "Overall Tonality": "...",
+            "NH NO": "...",
+            "Location": "..."
+        }}
+    ]
+}}
+
+The "results" array must contain exactly one result for every article provided.
+The "index" must match the article index supplied in the input.
+"""
+
+    # --------------------------------------------------
+    # GROQ REQUEST WITH RETRIES
+    # --------------------------------------------------
+
+    retries = 5
+
+    for attempt in range(retries):
+
+        try:
+
+            response = client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.1,
+                reasoning_effort="none",
+                response_format={
+                    "type": "json_object"
+                },
+                max_completion_tokens=2048
+            )
+
+            response_text = response.choices[0].message.content
+
+            parsed_response = json.loads(response_text)
+
+            # New JSON wrapper
+            if isinstance(parsed_response, dict):
+                if "results" in parsed_response:
+                    return parsed_response["results"]
+
+            # Safety fallback
+            if isinstance(parsed_response, list):
+                return parsed_response
+
+            raise ValueError(
+                "AI returned JSON but the expected 'results' array was missing."
+            )
+
+        except Exception as e:
+
+            error_text = str(e).lower()
+
+            # Rate limit / 429 / 413 token-limit errors
+            is_rate_limit = (
+                "rate_limit" in error_text
+                or "rate limit" in error_text
+                or "429" in error_text
+                or "tokens per minute" in error_text
+                or "request too large" in error_text
+                or "413" in error_text
+            )
+
+            if is_rate_limit and attempt < retries - 1:
+
+                wait_time = 5 * (2 ** attempt)
+
+                st.warning(
+                    f"Groq rate/token limit reached. "
+                    f"Retrying in {wait_time} seconds..."
+                )
+
+                time.sleep(wait_time)
+
+            elif attempt == retries - 1:
+
+                error_results = []
+
+                for item in articles_payload:
+
+                    error_results.append({
+                        "index": item["index"],
+                        "Category": "Error",
+                        "Subcategory": str(e),
+                        "Topic": "N/A",
+                        "Tonality": "N/A",
+                        "Overall Tonality": "N/A",
+                        "NH NO": "N/A",
+                        "Location": "N/A"
+                    })
+
+                return error_results
+
+            else:
+
+                time.sleep(2 ** attempt)
 
 
 # ==========================================
@@ -592,7 +759,7 @@ if app_mode == "🤖 MoRTH AI":
 
   if df_input is not None and not df_input.empty:
     batch_size = st.slider(
-        "Batch Size (Articles per AI Request)", min_value=1, max_value=10, value=5
+        "Batch Size (Articles per AI Request)", min_value=1, max_value=50, value=10
     )
 
     if st.button("🚀 Run AI Classification"):
@@ -603,7 +770,10 @@ if app_mode == "🤖 MoRTH AI":
       else:
 
         def classify_in_batches(df_articles, taxonomy_df, batch_size):
-          taxonomy_reference = taxonomy_df.to_string(index=False)
+          taxonomy_reference = taxonomy_df.to_json(
+            orient="records",
+            force_ascii=False
+          )
           results = []
           progress_bar = st.progress(0)
           total_rows = len(df_articles)
@@ -635,7 +805,7 @@ if app_mode == "🤖 MoRTH AI":
           )
 
         with st.spinner(
-            "Processing batch chunks through Gemini 3.5 Flash..."
+            "Processing batch chunks..."
         ):
           st.session_state.cached_output_df = classify_in_batches(
               df_input, taxonomy_df, batch_size

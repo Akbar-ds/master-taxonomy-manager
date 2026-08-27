@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from difflib import SequenceMatcher
 import json
 import re
 import time
@@ -68,37 +69,14 @@ def get_groq_client():
     return Groq(api_key=st.secrets["groq"]["api_key"])
 
 
-@st.cache_data
-def load_taxonomy():
-  try:
-    xls = pd.ExcelFile("NEW SA Topic CAT Gemini.xlsx")
-    return pd.read_excel(xls, xls.sheet_names[0])
-  except FileNotFoundError:
-    return None
-
-
 @st.cache_resource
 def init_connection() -> Client:
-  url = st.secrets["supabase"]["url"]
-  key = st.secrets["supabase"]["key"]
-  return create_client(url, key)
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
 
 
 supabase = init_connection()
-taxonomy_df = load_taxonomy()
-
-if taxonomy_df is None:
-  st.warning(
-      "⚠️ 'NEW SA Topic CAT Gemini.xlsx' was not found in the repository."
-      " Please upload your taxonomy file below to proceed."
-  )
-  uploaded_tax_file = st.file_uploader(
-      "Upload Master Taxonomy Excel", type=["xlsx"]
-  )
-  if uploaded_tax_file:
-    taxonomy_df = pd.read_excel(uploaded_tax_file)
-  else:
-    st.stop()
 
 ALLOWED_TONALITY_OPTIONS = [
     "All Tonalities",
@@ -171,282 +149,735 @@ def extract_main_topic(topic_str):
 
 
 # ==========================================
-# 5. AI BATCH CLASSIFICATION CACHED FUNCTION
-# ==========================================
-# ==========================================
 # 5. AI BATCH CLASSIFICATION
 # ==========================================
 
-@st.cache_data
-def classify_batch_articles(articles_json_str, taxonomy_reference):
 
-    client = get_groq_client()
-    articles_payload = json.loads(articles_json_str)
-
-    # --------------------------------------------------
-    # COMPACT TAXONOMY
-    # --------------------------------------------------
-    # taxonomy_reference is now a compact JSON string
-    # containing only the fields actually needed by AI.
+def normalize_text(value):
+    """Normalize text for reliable comparisons."""
+    if value is None:
+        return ""
     try:
-        taxonomy_records = json.loads(taxonomy_reference)
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
 
-        compact_taxonomy = []
 
-        for row in taxonomy_records:
+def normalize_subcategory(value):
+    text = normalize_text(value)
+    return "" if text in {"", "none", "nan", "null"} else text
 
-            category = str(
-                row.get("Category", row.get("category", ""))
-            ).strip()
 
-            subcategory = str(
-                row.get("Subcategory", row.get("subcategory", ""))
-            ).strip()
+def build_supabase_taxonomy(data):
+    """
+    Build the AI taxonomy exclusively from Supabase.
+    Supabase is the single source of truth.
+    """
+    taxonomy = []
 
-            topic = str(
-                row.get("Topic", row.get("topic", ""))
-            ).strip()
+    for tax_id, entry in enumerate(data):
+        category = str(entry.get("category", "")).strip()
+        topic = str(entry.get("topic", "")).strip()
+        subcategory_raw = entry.get("subcategory")
+        tonality_rule = str(
+            entry.get("tonality", "All Tonalities")
+        ).strip()
 
-            tonality = str(
-                row.get("Tonality", row.get("tonality", ""))
-            ).strip()
+        if not category or not topic:
+            continue
 
-            compact_taxonomy.append({
-                "Category": category,
-                "Subcategory": subcategory,
-                "Topic": topic,
-                "Tonality": tonality
-            })
+        if (
+            subcategory_raw is None
+            or pd.isna(subcategory_raw)
+            or str(subcategory_raw).strip().lower()
+            in {"", "none", "nan", "null"}
+        ):
+            subcategory = ""
+        else:
+            subcategory = str(subcategory_raw).strip()
 
-        compact_taxonomy_text = json.dumps(
-            compact_taxonomy,
-            ensure_ascii=False,
-            separators=(",", ":")
+        taxonomy.append({
+            "Taxonomy ID": tax_id,
+            "Category": category,
+            "Subcategory": subcategory,
+            "Topic": topic,
+            "Tonality Rule": tonality_rule,
+        })
+
+    return taxonomy
+
+
+CLASSIFIER_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "but", "of", "to", "in", "on",
+    "for", "from", "with", "by", "at", "is", "are", "was", "were",
+    "has", "have", "had", "this", "that", "these", "those", "as", "it",
+    "its", "be", "will", "would", "could", "should", "into", "over",
+    "under", "after", "before", "about", "than", "also", "said", "says",
+    "their", "there", "they", "them", "he", "she", "his", "her", "we",
+    "our", "you", "your", "which", "who", "what", "when", "where", "why",
+    "how", "while", "during", "through", "new", "one", "two", "three",
+}
+
+
+def _tokens(text):
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", normalize_text(text))
+        if len(word) >= 3 and word not in CLASSIFIER_STOP_WORDS
+    }
+
+
+def _phrases(text):
+    tokens = re.findall(r"[a-z0-9]+", normalize_text(text))
+    return {
+        " ".join(tokens[i:i + 2])
+        for i in range(len(tokens) - 1)
+    } | {
+        " ".join(tokens[i:i + 3])
+        for i in range(len(tokens) - 2)
+    }
+
+
+def _best_phrase_similarity(label, article_sentences):
+    """Approximate semantic/wording similarity without another API call."""
+    label_tokens = _tokens(label)
+    if not label_tokens or not article_sentences:
+        return 0.0
+
+    best = 0.0
+    for sentence in article_sentences[:30]:
+        sentence_tokens = _tokens(sentence)
+        if not sentence_tokens:
+            continue
+
+        overlap = len(label_tokens & sentence_tokens) / max(
+            1, len(label_tokens)
+        )
+        fuzzy = SequenceMatcher(
+            None,
+            normalize_text(label),
+            normalize_text(sentence)[:500],
+        ).ratio()
+        best = max(best, (overlap * 0.8) + (fuzzy * 0.2))
+
+    return best
+
+
+def taxonomy_matches_article(article_text, taxonomy, max_candidates=18):
+    """
+    Rank Supabase taxonomy records for an article.
+
+    Important: never append arbitrary database rows just to fill the
+    candidate list. That was one of the weaknesses of the previous version.
+    """
+    article = normalize_text(article_text)
+    article_words = _tokens(article)
+    article_phrases = _phrases(article)
+    sentences = [
+        s.strip()
+        for s in re.split(r"[.!?;\n]+", article)
+        if s.strip()
+    ]
+
+    scored = []
+
+    for item in taxonomy:
+        topic = normalize_text(item["Topic"])
+        category = normalize_text(item["Category"])
+        subcategory = normalize_text(item["Subcategory"])
+
+        topic_words = _tokens(topic)
+        sub_words = _tokens(subcategory)
+        cat_words = _tokens(category)
+
+        score = 0.0
+
+        # Topic is the strongest signal.
+        topic_overlap = len(article_words & topic_words)
+        score += topic_overlap * 7.0
+
+        # Subcategory/category help route related topics.
+        score += len(article_words & sub_words) * 2.5
+        score += len(article_words & cat_words) * 1.5
+
+        # Exact phrase matches are very strong.
+        if topic and topic in article:
+            score += 30.0
+        if subcategory and subcategory in article:
+            score += 8.0
+        if category and category in article:
+            score += 4.0
+
+        # Bigram/trigram phrase overlap.
+        label_phrases = _phrases(topic)
+        score += len(article_phrases & label_phrases) * 4.0
+
+        # Approximate wording similarity against article sentences.
+        score += _best_phrase_similarity(topic, sentences) * 6.0
+
+        scored.append((score, item))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    # If the taxonomy is small, give Qwen the complete taxonomy.
+    if len(scored) <= max_candidates:
+        return [item for _, item in scored]
+
+    return [item for _, item in scored[:max_candidates]]
+
+
+def allowed_tonalities(rule):
+    rule = str(rule or "All Tonalities").strip()
+
+    if rule == "Only Positive":
+        return ["Positive"]
+    if rule == "Only Negative":
+        return ["Negative"]
+    if rule == "Only Neutral":
+        return ["Neutral"]
+    if rule == "Neutral & Negative":
+        return ["Neutral", "Negative"]
+    return ["Positive", "Negative", "Neutral"]
+
+
+def canonicalize_result(result, full_taxonomy, candidate_taxonomy):
+    """
+    Hard validation.
+
+    Qwen returns only a Taxonomy ID. Python then retrieves the exact
+    Category/Subcategory/Topic/Tonality Rule from Supabase.
+    """
+    if not isinstance(result, dict):
+        return None
+
+    try:
+        tax_id = int(result.get("Taxonomy ID"))
+    except (TypeError, ValueError):
+        return None
+
+    candidate_ids = {
+        int(item["Taxonomy ID"])
+        for item in candidate_taxonomy
+    }
+
+    if tax_id not in candidate_ids:
+        return None
+
+    record = next(
+        (
+            item for item in full_taxonomy
+            if int(item["Taxonomy ID"]) == tax_id
+        ),
+        None,
+    )
+
+    if record is None:
+        return None
+
+    rule = record.get("Tonality Rule", "All Tonalities")
+    allowed = allowed_tonalities(rule)
+
+    ai_tonality = str(
+        result.get("Tonality", "")
+    ).strip().capitalize()
+
+    if ai_tonality not in allowed:
+        # For fixed database rules, Python can safely enforce the rule.
+        # For All Tonalities, the AI must provide a valid sentiment.
+        if len(allowed) == 1:
+            ai_tonality = allowed[0]
+        else:
+            return None
+
+    # Overall Tonality is intentionally canonicalized to the validated
+    # Tonality so the two fields can never conflict.
+    return {
+        "index": result.get("index"),
+        "Category": record["Category"],
+        "Subcategory": record["Subcategory"],
+        "Topic": record["Topic"],
+        "Tonality": ai_tonality,
+        "Overall Tonality": ai_tonality,
+        "NH NO": str(result.get("NH NO", "N/A")).strip() or "N/A",
+        "Location": str(result.get("Location", "N/A")).strip() or "N/A",
+    }
+
+
+def _is_rate_or_size_error(error):
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "rate_limit",
+            "rate limit",
+            "429",
+            "413",
+            "tokens per minute",
+            "request too large",
+        )
+    )
+
+
+def _groq_json_call(client, prompt, max_completion_tokens=1200):
+    """Single deterministic Groq JSON request."""
+    return client.chat.completions.create(
+        model="qwen/qwen3.6-27b",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        temperature=0,
+        reasoning_effort="none",
+        reasoning_format="hidden",
+        response_format={"type": "json_object"},
+        max_completion_tokens=max_completion_tokens,
+    )
+
+
+def _build_classification_prompt(articles_payload, candidate_taxonomy):
+    article_blocks = []
+
+    for article in articles_payload:
+        idx = article["index"]
+        candidates = candidate_taxonomy[idx]
+
+        compact_candidates = [
+            {
+                "Taxonomy ID": item["Taxonomy ID"],
+                "Category": item["Category"],
+                "Subcategory": item["Subcategory"],
+                "Topic": item["Topic"],
+                "Tonality Rule": item["Tonality Rule"],
+            }
+            for item in candidates
+        ]
+
+        article_blocks.append(
+            "ARTICLE INDEX: " + str(idx) + "\n"
+            "ARTICLE:\n" + str(article.get("content", "")) + "\n"
+            "VALID TAXONOMY RECORDS:\n" +
+            json.dumps(
+                compact_candidates,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         )
 
-    except Exception:
-        # Fallback in case taxonomy parsing fails
-        compact_taxonomy_text = str(taxonomy_reference)
+    return f"""
+You are the MoRTH media classification engine.
 
-    # --------------------------------------------------
-    # PROMPT
-    # --------------------------------------------------
+Classify every article using ONLY the supplied taxonomy records.
 
-    prompt = f"""
-You are an expert media analyst and taxonomy classification engine.
+HARD RULES:
+1. Return exactly one result for every article.
+2. Choose exactly ONE Taxonomy ID from that article's VALID TAXONOMY RECORDS.
+3. Never invent a Taxonomy ID.
+4. Never invent, rename, shorten or paraphrase a Topic.
+5. Category, Subcategory and Topic are taken from the selected database record.
+6. Never use Miscellaneous, Other, General or Unknown unless that exact Topic is
+   explicitly present in the supplied records.
+7. Overall Tonality MUST equal Tonality.
+8. Obey the selected record's Tonality Rule exactly.
 
-Analyze the batch of articles provided below and categorize each article strictly using ONLY the valid Categories, Subcategories, Topics, and Tonality rules in the Master Taxonomy Reference.
+TONALITY:
+- Positive: the article positively affects public perception of MoRTH/NHAI/NHIDCL/BRO,
+  Nitin Gadkari in his ministerial/client role, or a MoRTH-associated project, policy,
+  scheme, authority or infrastructure asset.
+- Negative: criticism, allegations, corruption, delays, failures, negligence,
+  accidents attributed to client action/inaction, protests, disputes, safety failures,
+  poor execution or other reporting that harms the client's public perception.
+- Neutral: factual reporting without a meaningful positive or negative client impact.
+- Ignore sentiment toward unrelated entities unless it directly affects the client.
 
-IMPORTANT:
-- Do not create new Categories.
-- Do not create new Subcategories.
-- Do not create new Topics.
-- Every selected Topic must exist exactly in the Master Taxonomy.
-- Follow all classification rules below.
-- Return ONLY valid JSON.
-- Do not include markdown.
-- Do not include explanations outside the JSON.
+DATABASE TONALITY RULES:
+- Only Positive -> Positive only.
+- Only Negative -> Negative only.
+- Only Neutral -> Neutral only.
+- Neutral & Negative -> Neutral or Negative only.
+- All Tonalities -> choose Positive, Negative or Neutral from the article.
 
-SPECIAL INSTRUCTIONS:
+TOPIC:
+Choose the topic that best represents the article's MAIN subject, not a minor mention.
+Prefer the most specific applicable topic over a broad one.
+Do not choose a topic merely because one word happens to appear in the article.
 
-1. If the content includes the name of an expressway or highway, provide the National Highway number or National Expressway name. If only the highway name is mentioned without a number, deduce the exact highway number when possible.
+NH NO:
+Return the highway number/name only when supported by the article. Otherwise N/A.
 
-2. Identify the main location the article is primarily about along with its exact state.
+LOCATION:
+Return the main location and state when supported by the article. Otherwise N/A.
 
-3. TONALITY DETERMINATION RULE - CLIENT CENTRIC
-
-When determining tonality, ALWAYS evaluate sentiment from the perspective of the client (MoRTH) and its associated entities, rather than the author, public, or any other stakeholder.
-
-The client ecosystem includes:
-
-- Ministry of Road Transport and Highways (MoRTH)
-- National Highways Authority of India (NHAI)
-- NHIDCL
-- Border Roads Organisation (BRO)
-- Union Minister Nitin Gadkari
-- Any official spokesperson, department, authority, project, scheme, initiative, policy, or infrastructure asset directly associated with these entities.
-
-Determine whether the article portrays the client or its entities in a Positive, Negative, or Neutral manner.
-
-POSITIVE:
-The article highlights achievements, successful projects, policy improvements, infrastructure development, awards, positive public impact, appreciation, transparency, innovation, efficiency, or information that enhances the reputation or public perception of MoRTH or its entities.
-
-NEGATIVE:
-The article reports criticism, allegations, corruption, delays, accidents attributed to negligence, project failures, protests, legal disputes, financial irregularities, poor execution, environmental concerns, public dissatisfaction, safety failures, controversies, or information that harms or negatively impacts the reputation of MoRTH or its associated entities.
-
-NEUTRAL:
-The article presents factual information without expressing a positive or negative implication towards the client.
-
-Examples include:
-- announcements
-- tenders
-- routine inspections
-- traffic advisories
-- policy notifications
-- appointments
-- factual updates
-- statistical reports
-- balanced reporting without judgment
-
-IMPORTANT TONALITY RULES:
-
-1. Tonality MUST always be determined with respect to MoRTH and its associated entities.
-
-2. Ignore sentiment toward unrelated individuals, companies, political parties, or organizations unless that sentiment directly affects the reputation or perception of MoRTH or its entities.
-
-3. If multiple entities are discussed, prioritize the sentiment directed toward MoRTH or its associated entities.
-
-4. If an article contains both positive and negative aspects about the client, determine the dominant overall sentiment. If neither clearly dominates, classify as Neutral.
-
-5. Always base tonality on the overall impact the article would have on public perception of MoRTH or its associated entities.
-
-6. Apply this client-centric tonality consistently when selecting Topic, Category, and Overall Tonality.
-
-TOPIC SELECTION RULE:
-
-The primary objective is to identify the Topic or Topics that best summarize the key themes and intent of the article.
-
-By default, assign ONLY ONE Topic.
-
-You may assign up to THREE Topics only when genuinely necessary.
-
-Use multiple Topics only when:
-
-- The article discusses multiple independent events or issues of equal importance.
-- Two or more major topics are deeply interconnected.
-- A single Topic would omit a critical aspect of the article.
-
-Do NOT assign multiple Topics merely because minor references to other subjects appear in the article.
-
-Prioritize Topics according to their relevance and importance.
-
-Every selected Topic MUST exist exactly as defined in the Master Taxonomy.
-
-If multiple Topics are selected, list them in order of importance, separated by commas.
-
-Multiple Topics should be exceptional rather than routine.
-
-MASTER TAXONOMY REFERENCE:
-
-{compact_taxonomy_text}
-
-ARTICLES TO CLASSIFY:
-
-{json.dumps(articles_payload, ensure_ascii=False, separators=(",", ":"))}
-
-RETURN FORMAT:
-
-Return a JSON object in exactly this structure:
-
+OUTPUT JSON ONLY:
 {{
-    "results": [
-        {{
-            "index": 0,
-            "Category": "...",
-            "Subcategory": "...",
-            "Topic": "...",
-            "Tonality": "...",
-            "Overall Tonality": "...",
-            "NH NO": "...",
-            "Location": "..."
-        }}
-    ]
+  "results": [
+    {{
+      "index": 0,
+      "Taxonomy ID": 0,
+      "Tonality": "Positive",
+      "NH NO": "N/A",
+      "Location": "N/A"
+    }}
+  ]
 }}
 
-The "results" array must contain exactly one result for every article provided.
-The "index" must match the article index supplied in the input.
+ARTICLES:
+
+{chr(10).join(article_blocks)}
 """
 
-    # --------------------------------------------------
-    # GROQ REQUEST WITH RETRIES
-    # --------------------------------------------------
 
-    retries = 5
+def _build_repair_prompt(invalid_articles, candidate_taxonomy):
+    blocks = []
 
-    for attempt in range(retries):
+    for article in invalid_articles:
+        idx = article["index"]
+        candidates = [
+            {
+                "Taxonomy ID": item["Taxonomy ID"],
+                "Category": item["Category"],
+                "Subcategory": item["Subcategory"],
+                "Topic": item["Topic"],
+                "Tonality Rule": item["Tonality Rule"],
+            }
+            for item in candidate_taxonomy[idx]
+        ]
 
+        blocks.append(
+            f"ARTICLE INDEX: {idx}\n"
+            f"ARTICLE:\n{article.get('content', '')}\n"
+            "VALID TAXONOMY RECORDS:\n"
+            + json.dumps(
+                candidates,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+
+    return f"""
+Correct the classification for the supplied articles.
+
+The previous answer was invalid because it did not satisfy the taxonomy rules.
+
+For each article:
+- Choose exactly one Taxonomy ID from its supplied records.
+- Do not invent a Topic.
+- Do not output Miscellaneous unless it is explicitly supplied.
+- Category/Subcategory/Topic come from the selected record.
+- Obey the selected record's Tonality Rule.
+- Overall Tonality must equal Tonality.
+- Return JSON only.
+
+{{
+  "results": [
+    {{
+      "index": 0,
+      "Taxonomy ID": 0,
+      "Tonality": "Neutral",
+      "NH NO": "N/A",
+      "Location": "N/A"
+    }}
+  ]
+}}
+
+{chr(10).join(blocks)}
+"""
+
+
+@st.cache_data(show_spinner=False)
+def classify_batch_articles(articles_json_str, taxonomy_reference):
+    """Classify a batch with Groq/Qwen and hard-validate against Supabase."""
+    client = get_groq_client()
+    articles_payload = json.loads(articles_json_str)
+    full_taxonomy = json.loads(taxonomy_reference)
+
+    if not full_taxonomy:
+        return [
+            {
+                "index": item["index"],
+                "Category": "Error",
+                "Subcategory": "No taxonomy",
+                "Topic": "N/A",
+                "Tonality": "N/A",
+                "Overall Tonality": "N/A",
+                "NH NO": "N/A",
+                "Location": "N/A",
+            }
+            for item in articles_payload
+        ]
+
+    candidate_taxonomy = {
+        article["index"]: taxonomy_matches_article(
+            article.get("content", ""),
+            full_taxonomy,
+            max_candidates=18,
+        )
+        for article in articles_payload
+    }
+
+    # If a candidate list somehow becomes empty, use the complete taxonomy only
+    # for that article. This is rare and avoids an invalid/empty AI request.
+    for article in articles_payload:
+        if not candidate_taxonomy[article["index"]]:
+            candidate_taxonomy[article["index"]] = full_taxonomy[:24]
+
+    prompt = _build_classification_prompt(
+        articles_payload,
+        candidate_taxonomy,
+    )
+
+    last_error = None
+
+    for attempt in range(4):
         try:
-
-            response = client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.1,
-                reasoning_effort="none",
-                response_format={
-                    "type": "json_object"
-                },
-                max_completion_tokens=2048
+            response = _groq_json_call(
+                client,
+                prompt,
+                max_completion_tokens=1200,
             )
 
-            response_text = response.choices[0].message.content
+            raw = response.choices[0].message.content
+            parsed = json.loads(raw)
+            ai_results = parsed.get("results", []) if isinstance(parsed, dict) else []
 
-            parsed_response = json.loads(response_text)
+            by_index = {
+                str(result.get("index")): result
+                for result in ai_results
+                if isinstance(result, dict)
+            }
 
-            # New JSON wrapper
-            if isinstance(parsed_response, dict):
-                if "results" in parsed_response:
-                    return parsed_response["results"]
+            validated = {}
+            invalid_articles = []
 
-            # Safety fallback
-            if isinstance(parsed_response, list):
-                return parsed_response
+            for article in articles_payload:
+                idx = article["index"]
+                result = by_index.get(str(idx))
 
-            raise ValueError(
-                "AI returned JSON but the expected 'results' array was missing."
-            )
-
-        except Exception as e:
-
-            error_text = str(e).lower()
-
-            # Rate limit / 429 / 413 token-limit errors
-            is_rate_limit = (
-                "rate_limit" in error_text
-                or "rate limit" in error_text
-                or "429" in error_text
-                or "tokens per minute" in error_text
-                or "request too large" in error_text
-                or "413" in error_text
-            )
-
-            if is_rate_limit and attempt < retries - 1:
-
-                wait_time = 5 * (2 ** attempt)
-
-                st.warning(
-                    f"Groq rate/token limit reached. "
-                    f"Retrying in {wait_time} seconds..."
+                canonical = canonicalize_result(
+                    result,
+                    full_taxonomy,
+                    candidate_taxonomy[idx],
                 )
 
-                time.sleep(wait_time)
+                if canonical is None:
+                    invalid_articles.append(article)
+                else:
+                    validated[idx] = canonical
 
-            elif attempt == retries - 1:
+            # Everything passed on the first attempt.
+            if not invalid_articles:
+                return [validated[a["index"]] for a in articles_payload]
 
-                error_results = []
+            # One targeted repair call for only invalid articles.
+            repair_prompt = _build_repair_prompt(
+                invalid_articles,
+                candidate_taxonomy,
+            )
 
-                for item in articles_payload:
+            repair_response = _groq_json_call(
+                client,
+                repair_prompt,
+                max_completion_tokens=900,
+            )
 
-                    error_results.append({
+            repair_raw = repair_response.choices[0].message.content
+            repair_parsed = json.loads(repair_raw)
+            repair_results = (
+                repair_parsed.get("results", [])
+                if isinstance(repair_parsed, dict)
+                else []
+            )
+
+            repair_by_index = {
+                str(result.get("index")): result
+                for result in repair_results
+                if isinstance(result, dict)
+            }
+
+            for article in invalid_articles:
+                idx = article["index"]
+                repaired = canonicalize_result(
+                    repair_by_index.get(str(idx)),
+                    full_taxonomy,
+                    candidate_taxonomy[idx],
+                )
+                if repaired is not None:
+                    validated[idx] = repaired
+
+            # If repair still failed, do NOT invent a taxonomy record.
+            # Mark the row clearly for review rather than silently producing
+            # a wrong topic.
+            final_results = []
+            for article in articles_payload:
+                idx = article["index"]
+                if idx in validated:
+                    final_results.append(validated[idx])
+                else:
+                    final_results.append({
+                        "index": idx,
+                        "Category": "REVIEW REQUIRED",
+                        "Subcategory": "REVIEW REQUIRED",
+                        "Topic": "REVIEW REQUIRED",
+                        "Tonality": "REVIEW REQUIRED",
+                        "Overall Tonality": "REVIEW REQUIRED",
+                        "NH NO": "N/A",
+                        "Location": "N/A",
+                    })
+
+            return final_results
+
+        except Exception as error:
+            last_error = error
+
+            error_text = str(error).lower()
+
+            # A 413/request-too-large error will not be fixed by waiting.
+            # Return a specific marker so classify_in_batches can split the
+            # batch automatically into smaller requests.
+            if (
+                "413" in error_text
+                or "request too large" in error_text
+                or "tokens per minute" in error_text
+            ):
+                return [
+                    {
                         "index": item["index"],
                         "Category": "Error",
-                        "Subcategory": str(e),
+                        "Subcategory": "REQUEST_TOO_LARGE: " + str(error),
                         "Topic": "N/A",
                         "Tonality": "N/A",
                         "Overall Tonality": "N/A",
                         "NH NO": "N/A",
-                        "Location": "N/A"
-                    })
+                        "Location": "N/A",
+                    }
+                    for item in articles_payload
+                ]
 
-                return error_results
+            if _is_rate_or_size_error(error) and attempt < 3:
+                wait_time = 4 * (2 ** attempt)
+                time.sleep(wait_time)
+                continue
 
-            else:
-
+            if attempt < 3:
                 time.sleep(2 ** attempt)
+                continue
+
+    return [
+        {
+            "index": item["index"],
+            "Category": "Error",
+            "Subcategory": str(last_error),
+            "Topic": "N/A",
+            "Tonality": "N/A",
+            "Overall Tonality": "N/A",
+            "NH NO": "N/A",
+            "Location": "N/A",
+        }
+        for item in articles_payload
+    ]
+
+
+def classify_in_batches(df_articles, taxonomy_data, batch_size):
+    """Process articles in controlled batches and auto-split oversized requests."""
+    taxonomy = build_supabase_taxonomy(taxonomy_data)
+    taxonomy_reference = json.dumps(
+        taxonomy,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    if not taxonomy:
+        raise ValueError(
+            "No taxonomy records were found in Supabase taxonomy_entries."
+        )
+
+    results_by_index = {}
+    progress_bar = st.progress(0)
+    total_rows = len(df_articles)
+    processed_count = 0
+
+    def process_batch(batch_df):
+        nonlocal processed_count
+
+        if batch_df.empty:
+            return
+
+        articles_payload = [
+            {
+                "index": int(idx),
+                "content": str(row.get("content_snippet", "")),
+            }
+            for idx, row in batch_df.iterrows()
+        ]
+
+        parsed_batch = classify_batch_articles(
+            json.dumps(
+                articles_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            taxonomy_reference,
+        )
+
+        oversized = any(
+            str(item.get("Subcategory", "")).startswith(
+                "REQUEST_TOO_LARGE:"
+            )
+            for item in parsed_batch
+        )
+
+        if oversized and len(batch_df) > 1:
+            midpoint = max(1, len(batch_df) // 2)
+            process_batch(batch_df.iloc[:midpoint])
+            process_batch(batch_df.iloc[midpoint:])
+            return
+
+        for item in parsed_batch:
+            results_by_index[item["index"]] = item
+
+        processed_count += len(batch_df)
+        progress_bar.progress(
+            min(processed_count / total_rows, 1.0)
+        )
+
+    for start in range(0, total_rows, batch_size):
+        process_batch(
+            df_articles.iloc[start:start + batch_size]
+        )
+
+    # Preserve exact input order and guarantee one result row per article.
+    result_rows = []
+    for idx in df_articles.index:
+        result_rows.append(
+            results_by_index.get(
+                int(idx),
+                {
+                    "index": int(idx),
+                    "Category": "Error",
+                    "Subcategory": "Missing result",
+                    "Topic": "N/A",
+                    "Tonality": "N/A",
+                    "Overall Tonality": "N/A",
+                    "NH NO": "N/A",
+                    "Location": "N/A",
+                },
+            )
+        )
+
+    result_df = pd.DataFrame(result_rows).drop(columns=["index"])
+
+    return pd.concat(
+        [
+            df_articles.reset_index(drop=True),
+            result_df.reset_index(drop=True),
+        ],
+        axis=1,
+    )
 
 
 # ==========================================
@@ -759,7 +1190,11 @@ if app_mode == "🤖 MoRTH AI":
 
   if df_input is not None and not df_input.empty:
     batch_size = st.slider(
-        "Batch Size (Articles per AI Request)", min_value=1, max_value=50, value=10
+        "Batch Size (Articles per AI Request)",
+        min_value=1,
+        max_value=10,
+        value=3,
+        help="Use 3-5 on the Groq free tier. You can increase this on a higher rate limit.",
     )
 
     if st.button("🚀 Run AI Classification"):
@@ -767,49 +1202,20 @@ if app_mode == "🤖 MoRTH AI":
         st.error(
             "Error: Data must contain a column named 'content_snippet'."
         )
+      elif not data:
+        st.error(
+            "No taxonomy records were found in Supabase. Please add taxonomy entries first."
+        )
       else:
-
-        def classify_in_batches(df_articles, taxonomy_df, batch_size):
-          taxonomy_reference = taxonomy_df.to_json(
-            orient="records",
-            force_ascii=False
-          )
-          results = []
-          progress_bar = st.progress(0)
-          total_rows = len(df_articles)
-
-          for i in range(0, total_rows, batch_size):
-            batch_df = df_articles.iloc[i : i + batch_size]
-            articles_payload = []
-            for idx, row in batch_df.iterrows():
-              articles_payload.append({
-                  "index": int(idx),
-                  "content": str(row.get("content_snippet", "")),
-              })
-
-            articles_json_str = json.dumps(articles_payload)
-            parsed_batch = classify_batch_articles(
-                articles_json_str, taxonomy_reference
+        try:
+          with st.spinner("Processing articles through Qwen 3.6 27B..."):
+            st.session_state.cached_output_df = classify_in_batches(
+                df_input,
+                data,
+                batch_size,
             )
-
-            if isinstance(parsed_batch, list):
-              results.extend(parsed_batch)
-            progress_bar.progress(min((i + batch_size) / total_rows, 1.0))
-
-          res_df = pd.DataFrame(results)
-          if not res_df.empty and "index" in res_df.columns:
-            res_df = res_df.sort_values(by="index").reset_index(drop=True)
-            res_df = res_df.drop(columns=["index"])
-          return pd.concat(
-              [df_articles.reset_index(drop=True), res_df], axis=1
-          )
-
-        with st.spinner(
-            "Processing batch chunks..."
-        ):
-          st.session_state.cached_output_df = classify_in_batches(
-              df_input, taxonomy_df, batch_size
-          )
+        except Exception as e:
+          st.error(f"Classification failed: {e}")
 
     if st.session_state.get("cached_output_df") is not None:
       st.success("✨ Classification complete!")
@@ -1203,11 +1609,11 @@ else:
         elif date_filter_option == "One Month Old (Last 30 Days)":
           if now_utc - created_dt <= timedelta(days=30):
             filtered_by_date.append(item)
-          elif date_filter_option == "Custom Range" and custom_date_range:
-            if len(custom_date_range) == 2:
-              start_d, end_d = custom_date_range
-              if start_d <= item_date <= end_d:
-                filtered_by_date.append(item)
+        elif date_filter_option == "Custom Range" and custom_date_range:
+          if len(custom_date_range) == 2:
+            start_d, end_d = custom_date_range
+            if start_d <= item_date <= end_d:
+              filtered_by_date.append(item)
       except Exception:
         pass
     filtered_data = filtered_by_date

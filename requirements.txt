@@ -1,7 +1,6 @@
-streamlit
+groq
 pandas
-openpyxl
-google-genai
+streamlit
 supabase
 streamlit-supabase-auth
-groq
+openpyxl

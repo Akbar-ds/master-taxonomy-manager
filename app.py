@@ -270,9 +270,6 @@ def _best_phrase_similarity(label, article_sentences):
 def taxonomy_matches_article(article_text, taxonomy, max_candidates=18):
     """
     Rank Supabase taxonomy records for an article.
-
-    Important: never append arbitrary database rows just to fill the
-    candidate list. That was one of the weaknesses of the previous version.
     """
     article = normalize_text(article_text)
     article_words = _tokens(article)
@@ -296,15 +293,12 @@ def taxonomy_matches_article(article_text, taxonomy, max_candidates=18):
 
         score = 0.0
 
-        # Topic is the strongest signal.
         topic_overlap = len(article_words & topic_words)
         score += topic_overlap * 7.0
 
-        # Subcategory/category help route related topics.
         score += len(article_words & sub_words) * 2.5
         score += len(article_words & cat_words) * 1.5
 
-        # Exact phrase matches are very strong.
         if topic and topic in article:
             score += 30.0
         if subcategory and subcategory in article:
@@ -312,18 +306,15 @@ def taxonomy_matches_article(article_text, taxonomy, max_candidates=18):
         if category and category in article:
             score += 4.0
 
-        # Bigram/trigram phrase overlap.
         label_phrases = _phrases(topic)
         score += len(article_phrases & label_phrases) * 4.0
 
-        # Approximate wording similarity against article sentences.
         score += _best_phrase_similarity(topic, sentences) * 6.0
 
         scored.append((score, item))
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
 
-    # If the taxonomy is small, give Qwen the complete taxonomy.
     if len(scored) <= max_candidates:
         return [item for _, item in scored]
 
@@ -345,12 +336,6 @@ def allowed_tonalities(rule):
 
 
 def canonicalize_result(result, full_taxonomy, candidate_taxonomy):
-    """
-    Hard validation.
-
-    Qwen returns only a Taxonomy ID. Python then retrieves the exact
-    Category/Subcategory/Topic/Tonality Rule from Supabase.
-    """
     if not isinstance(result, dict):
         return None
 
@@ -386,15 +371,11 @@ def canonicalize_result(result, full_taxonomy, candidate_taxonomy):
     ).strip().capitalize()
 
     if ai_tonality not in allowed:
-        # For fixed database rules, Python can safely enforce the rule.
-        # For All Tonalities, the AI must provide a valid sentiment.
         if len(allowed) == 1:
             ai_tonality = allowed[0]
         else:
             return None
 
-    # Overall Tonality is intentionally canonicalized to the validated
-    # Tonality so the two fields can never conflict.
     return {
         "index": result.get("index"),
         "Category": record["Category"],
@@ -423,7 +404,6 @@ def _is_rate_or_size_error(error):
 
 
 def _groq_json_call(client, prompt, max_completion_tokens=1200):
-    """Single deterministic Groq JSON request."""
     return client.chat.completions.create(
         model="qwen/qwen3.6-27b",
         messages=[
@@ -505,7 +485,6 @@ DATABASE TONALITY RULES:
 TOPIC:
 Choose the topic that best represents the article's MAIN subject, not a minor mention.
 Prefer the most specific applicable topic over a broad one.
-Do not choose a topic merely because one word happens to appear in the article.
 
 NH NO:
 Return the highway number/name only when supported by the article. Otherwise N/A.
@@ -562,13 +541,8 @@ def _build_repair_prompt(invalid_articles, candidate_taxonomy):
     return f"""
 Correct the classification for the supplied articles.
 
-The previous answer was invalid because it did not satisfy the taxonomy rules.
-
 For each article:
 - Choose exactly one Taxonomy ID from its supplied records.
-- Do not invent a Topic.
-- Do not output Miscellaneous unless it is explicitly supplied.
-- Category/Subcategory/Topic come from the selected record.
 - Obey the selected record's Tonality Rule.
 - Overall Tonality must equal Tonality.
 - Return JSON only.
@@ -591,7 +565,6 @@ For each article:
 
 @st.cache_data(show_spinner=False)
 def classify_batch_articles(articles_json_str, taxonomy_reference):
-    """Classify a batch with Groq/Qwen and hard-validate against Supabase."""
     client = get_groq_client()
     articles_payload = json.loads(articles_json_str)
     full_taxonomy = json.loads(taxonomy_reference)
@@ -620,8 +593,6 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
         for article in articles_payload
     }
 
-    # If a candidate list somehow becomes empty, use the complete taxonomy only
-    # for that article. This is rare and avoids an invalid/empty AI request.
     for article in articles_payload:
         if not candidate_taxonomy[article["index"]]:
             candidate_taxonomy[article["index"]] = full_taxonomy[:24]
@@ -669,11 +640,9 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
                 else:
                     validated[idx] = canonical
 
-            # Everything passed on the first attempt.
             if not invalid_articles:
                 return [validated[a["index"]] for a in articles_payload]
 
-            # One targeted repair call for only invalid articles.
             repair_prompt = _build_repair_prompt(
                 invalid_articles,
                 candidate_taxonomy,
@@ -709,9 +678,6 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
                 if repaired is not None:
                     validated[idx] = repaired
 
-            # If repair still failed, do NOT invent a taxonomy record.
-            # Mark the row clearly for review rather than silently producing
-            # a wrong topic.
             final_results = []
             for article in articles_payload:
                 idx = article["index"]
@@ -733,12 +699,8 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
 
         except Exception as error:
             last_error = error
-
             error_text = str(error).lower()
 
-            # A 413/request-too-large error will not be fixed by waiting.
-            # Return a specific marker so classify_in_batches can split the
-            # batch automatically into smaller requests.
             if (
                 "413" in error_text
                 or "request too large" in error_text
@@ -759,8 +721,7 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
                 ]
 
             if _is_rate_or_size_error(error) and attempt < 3:
-                wait_time = 4 * (2 ** attempt)
-                time.sleep(wait_time)
+                time.sleep(4 * (2 ** attempt))
                 continue
 
             if attempt < 3:
@@ -783,7 +744,6 @@ def classify_batch_articles(articles_json_str, taxonomy_reference):
 
 
 def classify_in_batches(df_articles, taxonomy_data, batch_size):
-    """Process articles in controlled batches and auto-split oversized requests."""
     taxonomy = build_supabase_taxonomy(taxonomy_data)
     taxonomy_reference = json.dumps(
         taxonomy,
@@ -850,7 +810,6 @@ def classify_in_batches(df_articles, taxonomy_data, batch_size):
             df_articles.iloc[start:start + batch_size]
         )
 
-    # Preserve exact input order and guarantee one result row per article.
     result_rows = []
     for idx in df_articles.index:
         result_rows.append(
@@ -1030,20 +989,15 @@ def edit_taxonomy_modal(
 
 
 # ==========================================
-# 8. EXCEL-LIKE COLUMN FILTERING UTILITY (Matching user image layout)
+# 8. EXCEL-LIKE COLUMN FILTERING UTILITY
 # ==========================================
 def render_excel_style_qc_section(df, display_columns, section_key_prefix):
-  """Renders clean Excel-like multi-select filter dropdown boxes directly above each column,
-
-  matching the provided interface layout exactly ("All Selected" dropdown boxes per column).
-  """
   working_df = df.copy()
   available_cols = [c for c in display_columns if c in working_df.columns]
   working_df = working_df[available_cols]
 
   filtered_df = working_df.copy()
 
-  # Render Excel-style column filter controls side-by-side matching headers
   st.markdown("### 🎛️ Column Filters")
   filter_cols = st.columns(len(available_cols))
 
@@ -1053,7 +1007,6 @@ def render_excel_style_qc_section(df, display_columns, section_key_prefix):
           [str(v) for v in working_df[col_name].dropna().unique()]
       )
       
-      # Use multi-select mimicking Excel filter dropdown field
       selected_vals = st.multiselect(
           label=col_name,
           options=unique_vals,
@@ -1070,7 +1023,6 @@ def render_excel_style_qc_section(df, display_columns, section_key_prefix):
   st.divider()
   st.subheader(f"📊 Filtered Results ({len(filtered_df)} rows)")
 
-  # Action Buttons Row
   btn_col1, btn_col2, _ = st.columns([1, 1, 3])
 
   with btn_col1:
@@ -1149,7 +1101,6 @@ if app_mode == "🤖 MoRTH AI":
     if "cached_output_df" not in st.session_state:
       st.session_state.cached_output_df = None
 
-    # Handle text input widget without modifying state directly via assignment
     snippet_text_input = st.text_area(
         "Enter content snippet",
         placeholder="Paste your content snippet here...",
@@ -1252,7 +1203,6 @@ elif app_mode == "🔍 MoRTH QC":
         else pd.read_excel(qc_file)
     )
 
-    # Sub-tabs for MoRTH QC
     qc_tabs = st.tabs([
         "👤 Journalist QC",
         "🗂️ Topic & Taxonomy QC",
@@ -1268,7 +1218,7 @@ elif app_mode == "🔍 MoRTH QC":
       cols = ["Medium", "Article ID", "Analysis By", "Analysis By Bureau", "Journalist"]
       render_excel_style_qc_section(qc_df, cols, "journalist_qc")
 
-    # 2. Topic Category and Sub Category QC
+    # 2. Topic Category and Sub Category QC (Correct / Incorrect Validation Fixed)
     with qc_tabs[1]:
       st.markdown("### 🗂️ Topic, Category & Sub-Category QC")
       st.markdown(
@@ -1280,29 +1230,23 @@ elif app_mode == "🔍 MoRTH QC":
 
       db_rules_map = {}
       for entry in data:
-        db_top = extract_main_topic(entry.get("topic", ""))
-        db_cat = str(entry.get("category", "")).strip().lower()
+        db_top = normalize_text(extract_main_topic(entry.get("topic", "")))
+        db_cat = normalize_text(entry.get("category", ""))
         db_sub = entry.get("subcategory")
-        if db_sub is None or pd.isna(db_sub) or str(db_sub).strip().lower() in ["none", "nan", ""]:
-          db_sub_norm = ""
-        else:
-          db_sub_norm = str(db_sub).strip().lower()
-          
+        db_sub_norm = normalize_text(db_sub) if db_sub is not None else ""
         db_ton_rule = str(entry.get("tonality", "All Tonalities")).strip()
-        db_rules_map[(db_top.lower(), db_cat, db_sub_norm)] = db_ton_rule
+        db_rules_map[(db_top, db_cat, db_sub_norm)] = db_ton_rule
 
       validation_rows = []
       for idx, row in qc_df.iterrows():
         raw_top = row.get("Topic", "")
-        clean_top = extract_main_topic(raw_top).lower()
+        clean_top = normalize_text(extract_main_topic(raw_top))
+        r_cat = normalize_text(row.get("Category", ""))
         
-        r_cat = str(row.get("Category", "")).strip().lower()
-        
-        r_sub_raw = row.get("Sub Category1", "")
-        if r_sub_raw is None or pd.isna(r_sub_raw) or str(r_sub_raw).strip().lower() in ["none", "nan", ""]:
-          r_sub = ""
-        else:
-          r_sub = str(r_sub_raw).strip().lower()
+        # Safely handle different subcategory column naming conventions across reports
+        sub_col_name = "Sub Category1" if "Sub Category1" in qc_df.columns else "Subcategory"
+        r_sub_raw = row.get(sub_col_name, "")
+        r_sub = normalize_text(r_sub_raw) if r_sub_raw is not None else ""
 
         r_ton = str(row.get("Tonality", "")).strip()
 
@@ -1350,7 +1294,7 @@ elif app_mode == "🔍 MoRTH QC":
           "Analysis By",
           "Topic",
           "Category",
-          "Sub Category1",
+          sub_col_name,
           "Tonality",
           "Analysis By Bureau",
           "Rule Logic",
@@ -1405,7 +1349,6 @@ elif app_mode == "🔍 MoRTH QC":
     with qc_tabs[4]:
       st.markdown("### ⚖️ Tonality Conflicts QC")
       conflict_df = qc_df.copy()
-      conflict_flags = []
       filtered_conflict_rows = []
 
       for idx, row in conflict_df.iterrows():
@@ -1424,11 +1367,7 @@ elif app_mode == "🔍 MoRTH QC":
             and overall_ton.lower() != row_ton.lower()
         )
 
-        if is_missing:
-          conflict_flags.append("Missing Tonality")
-          filtered_conflict_rows.append(row)
-        elif is_mismatch:
-          conflict_flags.append("Mismatched")
+        if is_missing or is_mismatch:
           filtered_conflict_rows.append(row)
 
       if filtered_conflict_rows:
@@ -1446,9 +1385,7 @@ elif app_mode == "🔍 MoRTH QC":
             "Medium",
             "Analysis By",
             "Analysis By Bureau",
-            "Entity",
             "Category",
-            "Sub Category1",
             "Overall Tonality",
             "Tonality",
             "Flag",
@@ -1457,7 +1394,7 @@ elif app_mode == "🔍 MoRTH QC":
       else:
         st.success("✨ No tonality conflicts or missing values found!")
 
-    # 6. Blank Tonality QC (Strictly Bureau is completely empty and Topic is present)
+    # 6. Blank Tonality QC
     with qc_tabs[5]:
       st.markdown("### ⚠️ Blank Tonality / Bureau QC")
       st.markdown(
@@ -1474,20 +1411,17 @@ elif app_mode == "🔍 MoRTH QC":
 
         has_topic = topic_val is not None and not pd.isna(topic_val) and str(topic_val).strip() != "" and str(topic_val).strip().lower() not in ["nan", "none", ""]
         
-        # Strict blank check implementation as requested
         is_bureau_blank = (
             bureau_val is None 
             or pd.isna(bureau_val) 
             or str(bureau_val).strip() == ""
         )
 
-        # Strict rule enforcement: Only keep rows where this rule is true
         if has_topic and is_bureau_blank:
           filtered_blank.append(row)
 
       if filtered_blank:
         blank_res_df = pd.DataFrame(filtered_blank)
-        # Added the Bureau column ("Analysis By Bureau") along with all the other columns as requested
         cols_blank = [
             "Article ID",
             "Medium",

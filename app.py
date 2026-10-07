@@ -1034,7 +1034,7 @@ def render_classification_feedback(result_df):
 st.sidebar.title("🧭 Explore")
 app_mode = st.sidebar.selectbox(
     "Choose Application Mode",
-    ["📋 Master Taxonomy Manager", "🤖 MoRTH AI", "🔍 MoRTH QC"],
+    ["📋 Master Taxonomy Manager", "🤖 MoRTH AI", "🔍 MoRTH QC", "🔢 ID Splitter"],
 )
 
 
@@ -1252,6 +1252,37 @@ def render_excel_style_qc_section(df, display_columns, section_key_prefix):
 
     st.dataframe(filtered_df, use_container_width=True)
     return filtered_df
+
+
+# ==========================================
+# 8b. ID SPLITTER UTILITIES
+# ==========================================
+def parse_ids(raw_text, remove_duplicates=False):
+    """Split pasted text into a list of IDs (separated by commas, spaces or new lines)."""
+    ids = [token.strip() for token in re.split(r"[,\s;]+", raw_text or "") if token.strip()]
+    if remove_duplicates:
+        ids = list(dict.fromkeys(ids))  # removes duplicates, keeps original order
+    return ids
+
+
+def split_ids_into_parts(ids, num_parts):
+    """
+    Distribute IDs into `num_parts` groups as evenly as possible, keeping order.
+
+    Example: 100 IDs into 5 parts -> 20, 20, 20, 20, 20
+             103 IDs into 5 parts -> 21, 21, 21, 20, 20
+    """
+    total = len(ids)
+    num_parts = max(1, min(num_parts, total)) if total else 1
+    base_size, extra = divmod(total, num_parts)
+
+    parts = []
+    start = 0
+    for part_no in range(num_parts):
+        size = base_size + (1 if part_no < extra else 0)
+        parts.append(ids[start : start + size])
+        start += size
+    return parts
 
 
 # ==========================================
@@ -1661,6 +1692,92 @@ elif app_mode == "🔍 MoRTH QC":
         st.info(
             "ℹ️ Please upload an analysis spreadsheet above to activate the QC"
             " modules."
+        )
+
+elif app_mode == "🔢 ID Splitter":
+    st.subheader("🔢 ID Splitter")
+    st.markdown(
+        "<p style='font-size: 15px; color: #475569;'>Paste your IDs, choose how many"
+        " parts you want, and the IDs will be distributed evenly across those"
+        " parts.</p>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+
+    ids_text = st.text_area(
+        "Paste IDs here (separated by commas, spaces or new lines)",
+        placeholder="e.g. 1001, 1002, 1003 ...",
+        height=180,
+        key="id_splitter_input",
+    )
+
+    opt_col1, opt_col2 = st.columns([1, 2])
+    with opt_col1:
+        num_parts_input = st.number_input(
+            "Number of parts",
+            min_value=1,
+            value=2,
+            step=1,
+            key="id_splitter_parts",
+            help="Example: 100 IDs with 5 parts gives 20 IDs in each part.",
+        )
+    with opt_col2:
+        st.write("")
+        st.write("")
+        dedupe_ids = st.checkbox(
+            "Remove duplicate IDs",
+            value=False,
+            key="id_splitter_dedupe",
+        )
+
+    all_ids = parse_ids(ids_text, remove_duplicates=dedupe_ids)
+    st.info(f"📌 Total IDs detected: **{len(all_ids)}**")
+
+    if st.button("✂️ Split IDs", key="id_splitter_btn"):
+        if not all_ids:
+            st.warning("Please paste at least one ID.")
+        else:
+            requested_parts = int(num_parts_input)
+            if requested_parts > len(all_ids):
+                st.warning(
+                    f"You asked for {requested_parts} parts but there are only"
+                    f" {len(all_ids)} IDs, so it was reduced to {len(all_ids)} parts."
+                )
+            st.session_state.id_splitter_result = split_ids_into_parts(
+                all_ids, requested_parts
+            )
+
+    if st.session_state.get("id_splitter_result"):
+        parts = st.session_state.id_splitter_result
+        st.success(
+            f"✨ Split {sum(len(p) for p in parts)} IDs into {len(parts)} parts."
+        )
+
+        summary_df = pd.DataFrame(
+            {
+                "Part": [f"Part {i + 1}" for i in range(len(parts))],
+                "IDs Count": [len(p) for p in parts],
+                "First ID": [p[0] if p else "" for p in parts],
+                "Last ID": [p[-1] if p else "" for p in parts],
+            }
+        )
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+        for i, part in enumerate(parts):
+            with st.expander(f"📦 Part {i + 1} — {len(part)} IDs", expanded=True):
+                st.code(", ".join(part), language="text")  # has a built-in copy icon
+
+        # Download everything in one CSV (one column per part)
+        longest = max(len(p) for p in parts)
+        download_df = pd.DataFrame(
+            {f"Part {i + 1}": p + [""] * (longest - len(p)) for i, p in enumerate(parts)}
+        )
+        st.download_button(
+            label="📥 Download All Parts (CSV)",
+            data=download_df.to_csv(index=False).encode("utf-8"),
+            file_name="split_ids.csv",
+            mime="text/csv",
+            key="id_splitter_download",
         )
 
 else:
